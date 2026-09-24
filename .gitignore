@@ -1,0 +1,47 @@
+# Operating system files
+.DS_Store
+.Spotlight-V100
+.Trashes
+ignore.*
+Thumbs.db
+$RECYCLE.BIN/
+.tmp/
+temp/
+
+# Editor and IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+dist/
+build/
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+
+# SSL certificates
+*.pem
+
+# AI tool caches
+.claude
+.openclaw
+.cursor/
+.aider*
+.serena/
+.windsurf/
+
+# Logs
+*.log
+logs/
