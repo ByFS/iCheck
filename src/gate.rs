@@ -139,6 +139,7 @@ pub fn report_rates(largest: Option<&Path>, algo: Algorithm, cores: usize) {
     } else {
         println!("INFO: Workers: start at 1 of {cores} cores, raised while throughput improves");
     }
+    println!();
 }
 
 /// 运行中的自适应控制器

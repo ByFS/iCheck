@@ -96,14 +96,13 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         }
     }
 
-    // 每个文件三行, 字段顺序与 check 一致
-    for f in &files {
-        println!("INFO: name: {}", f.name);
-        println!("INFO: size: {}", f.size);
-        println!("INFO: blake3: {}", f.blake3);
-    }
-    for name in &unreadable {
-        println!("[UNREADABLE] {name}");
+    // 只在有问题时逐条列出, 算过的文件不刷屏 —— 清单与哈希都在 JSON 里
+    if !unreadable.is_empty() {
+        let rows: Vec<Row> = unreadable
+            .iter()
+            .map(|name| Row::new("[UNREADABLE]", name))
+            .collect();
+        crate::report::print_rows(&rows);
     }
 
     let now = crate::now_rfc3339();
@@ -146,7 +145,6 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
     ];
     pairs.push(("Anchor", anchor::index_path(root).display().to_string()));
 
-    println!();
     crate::report::print_summary(&pairs, if failed == 0 { "PASS" } else { "FAIL" });
 
     Ok(Outcome { failed })

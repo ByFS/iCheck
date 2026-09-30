@@ -76,7 +76,6 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     let manifest = upstream::fetch(platform, model_id, revision)?;
 
     println!("INFO: Files: {} (upstream manifest)", manifest.entries.len());
-    println!("INFO: Start obtaining information");
 
     let prev: Option<OfficialHash> = jsonio::load(&state_path)?;
 
@@ -103,13 +102,6 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     } else {
         OfficialHash::new(platform, model_id, &manifest.entries)
     };
-
-    println!();
-    for f in &state.files {
-        println!("INFO: name: {}", f.name);
-        println!("INFO: size: {}", f.size);
-        println!("INFO: sha256: {}", f.sha256);
-    }
 
     // 建任务: 续跑时只有 pass 且本地大小仍与记录一致的才跳过, 其余一律重算
     let mut tasks = Vec::new();
@@ -139,7 +131,6 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
             tasks.len()
         );
     }
-    println!();
 
     let mut details: HashMap<usize, Vec<String>> = HashMap::new();
     let mut hash_mismatch = 0usize;
