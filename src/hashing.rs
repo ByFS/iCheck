@@ -93,3 +93,11 @@ pub fn to_hex(bytes: &[u8]) -> String {
     }
     s
 }
+
+/// 对内存里的一段字节求哈希, 供开工前的探测用
+pub fn hash_bytes(bytes: &[u8], algo: Algorithm) -> String {
+    match algo {
+        Algorithm::Sha256 => to_hex(&Sha256::digest(bytes)),
+        Algorithm::Blake3 => blake3::hash(bytes).to_hex().to_string(),
+    }
+}

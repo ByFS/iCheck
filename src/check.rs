@@ -233,8 +233,10 @@ fn run_tasks(
     details: &mut HashMap<usize, Vec<String>>,
 ) -> Result<usize> {
     let workers = gate::max_workers();
+    let largest = tasks.iter().max_by_key(|t| t.size).map(|t| t.path.as_path());
+    gate::report_rates(largest, Algorithm::Sha256, workers);
     let gate = Gate::new(1);
-    let mut governor = Governor::new(workers);
+    let mut governor = Governor::new(workers, 1);
     let next = AtomicUsize::new(0);
     // 连续计量"实际读到的字节", 控制器与进度都用它
     let bytes_read = AtomicU64::new(0);
@@ -293,7 +295,14 @@ fn run_tasks(
 
             let now = gate::read_counter(&bytes_read);
             if governor.tick(&gate, now) {
-                gate::print_progress(received, tasks.len(), now, total_bytes, governor.limit());
+                gate::print_progress(
+                    received,
+                    tasks.len(),
+                    now,
+                    total_bytes,
+                    governor.limit(),
+                    governor.rate_bps(),
+                );
             }
 
             if since_flush >= FLUSH_EVERY || last_flush.elapsed() >= FLUSH_INTERVAL {

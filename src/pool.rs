@@ -25,8 +25,10 @@ pub fn hash_all(jobs: &[Job], algo: Algorithm) -> Vec<Option<String>> {
     }
 
     let workers = gate::max_workers();
+    let largest = jobs.iter().max_by_key(|j| j.size).map(|j| j.path.as_path());
+    gate::report_rates(largest, algo, workers);
     let gate = Gate::new(1);
-    let mut governor = Governor::new(workers);
+    let mut governor = Governor::new(workers, 1);
     let next = AtomicUsize::new(0);
     let bytes = gate::new_counter();
     let total_bytes: u64 = jobs.iter().map(|j| j.size).sum();
@@ -72,7 +74,14 @@ pub fn hash_all(jobs: &[Job], algo: Algorithm) -> Vec<Option<String>> {
             }
             let now = gate::read_counter(&bytes);
             if governor.tick(&gate, now) {
-                gate::print_progress(received, n, now, total_bytes, governor.limit());
+                gate::print_progress(
+                    received,
+                    n,
+                    now,
+                    total_bytes,
+                    governor.limit(),
+                    governor.rate_bps(),
+                );
             }
         }
         gate::clear_progress();
