@@ -62,7 +62,18 @@ pub fn fetch(model_id: &str, revision: Option<&str>) -> Result<Manifest> {
         .into_string()
         .map_err(|e| Error::Http(format!("failed to read the response: {e}")))?;
     crate::debug!("body {} bytes", body.len());
-    let parsed: Resp = serde_json::from_str(&body)?;
+
+    Ok(Manifest {
+        entries: parse(&body)?,
+    })
+}
+
+/// 解析响应体
+///
+/// 与网络分开是为了能被单测: 上游的字段名与"哪些条目该丢"的规则都集中在这里,
+/// 而这部分是上游一变就会坏掉的地方
+fn parse(body: &str) -> Result<Vec<Entry>> {
+    let parsed: Resp = serde_json::from_str(body)?;
 
     if !parsed.success || parsed.code != 200 {
         return Err(Error::Upstream(format!(
@@ -113,5 +124,115 @@ pub fn fetch(model_id: &str, revision: Option<&str>) -> Result<Manifest> {
     if entries.is_empty() {
         return Err(Error::Upstream("manifest is empty".to_string()));
     }
-    Ok(Manifest { entries })
+    Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一个 Files[] 条目, 只写测试关心的字段
+    fn item(path: &str, size: u64, sha: Option<&str>, rev: Option<&str>, kind: &str) -> String {
+        let sha = match sha {
+            Some(s) => format!("\"{s}\""),
+            None => "null".to_string(),
+        };
+        let rev = match rev {
+            Some(r) => format!("\"{r}\""),
+            None => "null".to_string(),
+        };
+        format!(r#"{{"Path":"{path}","Size":{size},"Sha256":{sha},"Revision":{rev},"Type":"{kind}"}}"#)
+    }
+
+    fn blob(path: &str) -> String {
+        item(path, 3, Some("aa"), Some("master"), "blob")
+    }
+
+    /// 只按上游真实字段名拼, 手写字段名错了测试就该红
+    fn body(items: &[String]) -> String {
+        let mut s = String::from(r#"{"Code":200,"Success":true,"Message":"ok","Data":{"Files":["#);
+        s.push_str(&items.join(","));
+        s.push_str("]}}");
+        s
+    }
+
+    /// 目录条目不该进清单: 上游把文件和目录放在同一个数组里
+    #[test]
+    fn keeps_blobs_and_drops_directories() {
+        let raw = body(&[item("sub", 0, None, None, "tree"), blob("sub/a.txt")]);
+        let entries = parse(&raw).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "sub/a.txt");
+    }
+
+    /// 大小写和空白都在这里抹平, 下游一律拿小写比较
+    #[test]
+    fn normalizes_sha256_and_revision() {
+        let raw = body(&[item("a.txt", 1, Some("AABB"), Some("  MASTER  "), "blob")]);
+        let entries = parse(&raw).unwrap();
+        assert_eq!(entries[0].sha256, "aabb");
+        assert_eq!(entries[0].revision, "master");
+    }
+
+    /// 拿不到哈希的条目没有校验价值, 不进结构
+    #[test]
+    fn drops_entries_without_sha256() {
+        let raw = body(&[
+            item("none.txt", 1, None, None, "blob"),
+            item("empty.txt", 1, Some(""), None, "blob"),
+            item("blank.txt", 1, Some("   "), None, "blob"),
+            blob("kept.txt"),
+        ]);
+        let entries = parse(&raw).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "kept.txt");
+    }
+
+    /// revision 缺失落成空串, 不 panic
+    #[test]
+    fn missing_revision_becomes_empty() {
+        let raw = body(&[item("a.txt", 1, Some("aa"), None, "blob")]);
+        assert_eq!(parse(&raw).unwrap()[0].revision, "");
+    }
+
+    /// Code / Success 不对时报的是上游错误, 带上 Message 便于定位
+    #[test]
+    fn reports_upstream_failure() {
+        let raw = r#"{"Code":404,"Success":false,"Message":"model not found"}"#;
+        match parse(raw) {
+            Err(Error::Upstream(m)) => {
+                assert!(m.contains("404"), "{m}");
+                assert!(m.contains("model not found"), "{m}");
+            }
+            other => panic!("expected an upstream error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_data_field_is_an_error() {
+        let raw = r#"{"Code":200,"Success":true}"#;
+        match parse(raw) {
+            Err(Error::Upstream(m)) => assert!(m.contains("no Data"), "{m}"),
+            other => panic!("expected an upstream error, got {other:?}"),
+        }
+    }
+
+    /// 空清单当错误: 静默通过会让 check 报一个全 0 的 PASS
+    #[test]
+    fn empty_manifest_is_an_error() {
+        let empty = body(&[]);
+        match parse(&empty) {
+            Err(Error::Upstream(m)) => assert!(m.contains("empty"), "{m}"),
+            other => panic!("expected an upstream error, got {other:?}"),
+        }
+
+        // 只有目录也一样
+        let only_dirs = body(&[item("sub", 0, None, None, "tree")]);
+        assert!(matches!(parse(&only_dirs), Err(Error::Upstream(_))));
+    }
+
+    #[test]
+    fn malformed_body_is_a_data_error() {
+        assert!(matches!(parse("not json at all"), Err(Error::Data(_))));
+    }
 }

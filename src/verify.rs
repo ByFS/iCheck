@@ -50,12 +50,12 @@ pub fn run(root: &Path) -> Result<Outcome> {
         let path = root.join(&f.name);
         match std::fs::metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                broken_rows.push(Row::new("[MISSING]", &f.name));
+                broken_rows.push(Row::new(report::MISSING, &f.name));
                 slots.push(Slot::Broken);
             }
             Err(e) => {
                 broken_rows.push(Row::with_detail(
-                    "[UNREADABLE]",
+                    report::UNREADABLE,
                     &f.name,
                     vec![format!("Reason: {e}")],
                 ));
@@ -63,7 +63,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
             }
             Ok(m) if !m.is_file() => {
                 broken_rows.push(Row::with_detail(
-                    "[UNREADABLE]",
+                    report::UNREADABLE,
                     &f.name,
                     vec!["Reason: not a regular file".to_string()],
                 ));
@@ -71,7 +71,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
             }
             Ok(m) if m.len() != f.size => {
                 broken_rows.push(Row::with_detail(
-                    "[FAIL]",
+                    report::FAIL,
                     &f.name,
                     vec![
                         format!("Expected: {}", f.size),
@@ -98,7 +98,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
     for entry in &actual {
         if !expected.contains(entry.name.as_str()) {
             added_rows.push(Row::with_detail(
-                "[ADDED]",
+                report::ADDED,
                 &entry.name,
                 vec![format!("Size: {}", entry.size)],
             ));
@@ -149,12 +149,12 @@ pub fn run(root: &Path) -> Result<Outcome> {
         };
         match &digests[job] {
             Some(hex) if *hex == f.blake3 => {
-                rows.push(Row::new("[PASS]", &f.name));
+                rows.push(Row::new(report::PASS, &f.name));
                 passed += 1;
             }
             Some(hex) => {
                 rows.push(Row::with_detail(
-                    "[FAIL]",
+                    report::FAIL,
                     &f.name,
                     vec![
                         format!("Expected: {}", f.blake3),
@@ -166,7 +166,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
             }
             None => {
                 rows.push(Row::with_detail(
-                    "[UNREADABLE]",
+                    report::UNREADABLE,
                     &f.name,
                     vec!["Reason: read failed".to_string()],
                 ));

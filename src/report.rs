@@ -5,6 +5,16 @@ pub const LIST_LIMIT: usize = 200;
 /// 固定宽度而不是按本轮内容自适应, 是为了让同一轮里所有块以及多轮之间的输出现齐
 pub const TAG_WIDTH: usize = 15;
 
+/// 结果行的标签, 全工具一套词
+///
+/// check 的逐文件状态与 verify 的逐文件结论用的是同一批词, 集中在这里是为了只有
+/// 一个来源: 曾经 verify 那边手写了一遍字面量, 改名字就得改两处, 早晚要分叉
+pub const PASS: &str = "[PASS]";
+pub const FAIL: &str = "[FAIL]";
+pub const MISSING: &str = "[MISSING]";
+pub const UNREADABLE: &str = "[UNREADABLE]";
+pub const ADDED: &str = "[ADDED]";
+
 /// 计数带名词: 1 file / 2 files
 ///
 /// 直接写 "{n} files" 会在 n = 1 时打出 "1 files", 而报告是要贴进工单的
