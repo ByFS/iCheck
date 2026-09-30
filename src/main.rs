@@ -45,6 +45,11 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
     };
 
     match command.as_str() {
+        "check" | "generate" | "verify" => warn_unoptimized(),
+        _ => {}
+    }
+
+    match command.as_str() {
         "check" => {
             let (positional, revision) = split_args(&args[1..])?;
             if positional.len() != 3 {
@@ -81,6 +86,17 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
         }
         other => Err(Error::Usage(format!("unknown command: {other}"))),
     }
+}
+
+/// debug 构建下哈希慢约 20 倍, 而从输出里完全看不出来 —— 开工前直接说破
+///
+/// 生产机上跑过 debug 二进制, 单线程 SHA-256 只有 0.03 GB/s, 被误当成存储或
+/// CPU 配额的问题查了很久。所以这里主动提示, 免得再踩
+fn warn_unoptimized() {
+    #[cfg(debug_assertions)]
+    println!(
+        "WARN: unoptimized build, hashing runs roughly 20x slower; rebuild with `cargo build --release`"
+    );
 }
 
 /// 退出码: 0 通过 / 1 仅集合级差异 / 2 内容不符 / 3 工具或数据故障(见 error)
