@@ -30,7 +30,7 @@ impl CheckState {
     /// 结果块里用的标签
     pub fn tag(self) -> &'static str {
         match self {
-            CheckState::Pass => "[OK]",
+            CheckState::Pass => "[PASS]",
             CheckState::Fail => "[FAIL]",
             CheckState::Missing => "[MISSING]",
             CheckState::Unreadable => "[UNREADABLE]",

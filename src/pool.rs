@@ -84,7 +84,7 @@ pub fn hash_all(jobs: &[Job], algo: Algorithm) -> Vec<Option<String>> {
                 );
             }
         }
-        gate::clear_progress();
+        crate::log::set_progress(None);
     });
 
     out

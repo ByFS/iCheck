@@ -69,18 +69,18 @@ impl Verdict {
 pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&str>) -> Result<Outcome> {
     let state_path = official::path_in(root);
 
-    println!("INFO: Source: {}", platform.display_name());
-    println!("INFO: Model ID: {model_id}");
-    println!("INFO: Obtain model information");
+    crate::info!("Source: {}", platform.display_name());
+    crate::info!("Model ID: {model_id}");
+    crate::info!("Fetching upstream manifest");
 
     let fetch_started = Instant::now();
     let manifest = upstream::fetch(platform, model_id, revision)?;
-    crate::debug_log!("fetch finished in {} ms", fetch_started.elapsed().as_millis());
+    crate::debug!("fetch finished in {} ms", fetch_started.elapsed().as_millis());
 
-    println!("INFO: Files: {} (upstream manifest)", manifest.entries.len());
+    crate::info!("Upstream manifest: {}", report::files(manifest.entries.len()));
 
     let prev: Option<OfficialHash> = jsonio::load(&state_path)?;
-    crate::debug_log!(
+    crate::debug!(
         "state {}: {}",
         state_path.display(),
         match &prev {
@@ -97,7 +97,7 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     // 上次跑完了再跑就是一次新的校验, 一律从新快照重来
     // 否则会在文件被改过之后谎报 PASS
     let resuming = prev.as_ref().is_some_and(|p| !p.is_complete());
-    crate::debug_log!("resuming: {resuming}");
+    crate::debug!("resuming: {resuming}");
 
     let mut state = if resuming {
         let p = prev.as_ref().unwrap();
@@ -137,20 +137,17 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     }
 
     let total_bytes: u64 = tasks.iter().map(|t| t.size).sum();
-    crate::debug_log!(
+    crate::debug!(
         "{} entries: {skipped} skipped, {} to verify, {:.2} GB expected",
         state.files.len(),
         tasks.len(),
         total_bytes as f64 / 1e9
     );
 
-    println!();
-    println!("INFO: Checking model");
+    crate::log::blank();
+    crate::info!("Checking model");
     if skipped > 0 {
-        println!(
-            "INFO: Resume: {skipped} file(s) already passed, {} to verify",
-            tasks.len()
-        );
+        crate::info!("Resume: {skipped} already passed, {} to verify", tasks.len());
     }
 
     let mut details: HashMap<usize, Vec<String>> = HashMap::new();
@@ -159,6 +156,7 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
         hash_mismatch = run_tasks(&mut state, &tasks, total_bytes, &state_path, &mut details)?;
     }
 
+    crate::log::blank();
     let failed = report(&state, &details, &state_path);
 
     Ok(Outcome {
@@ -184,22 +182,25 @@ fn report(state: &OfficialHash, details: &HashMap<usize, Vec<String>>, state_pat
         let detail = details.get(&idx).cloned().unwrap_or_default();
         rows.push(Row::with_detail(f.check.tag(), &f.name, detail));
     }
-    report::print_rows(&rows);
+    let mut shown = report::print_rows(&rows);
     if !list_all {
         println!(
-            "{:width$} ... {pass} passed file(s) not listed",
+            "{:width$} ... {pass} more not listed",
             "",
             width = report::TAG_WIDTH
         );
+        shown += 1;
     }
 
-    println!();
+    if shown > 0 {
+        println!();
+    }
     report::print_summary(
         &[
             ("Files", total.to_string()),
             ("Passed", pass.to_string()),
             ("Failed", failed.to_string()),
-            ("Anchor", state_path.display().to_string()),
+            ("State", state_path.display().to_string()),
         ],
         if failed == 0 { "PASS" } else { "FAIL" },
     );
@@ -293,9 +294,9 @@ fn run_tasks(
             match rx.recv_timeout(POLL) {
                 Ok((idx, v)) => {
                     if v.detail.is_empty() {
-                        crate::debug_log!("{} {}", v.state.tag(), state.files[idx].name);
+                        crate::debug!("{} {}", v.state.tag(), state.files[idx].name);
                     } else {
-                        crate::debug_log!(
+                        crate::debug!(
                             "{} {}  {}",
                             v.state.tag(),
                             state.files[idx].name,
@@ -335,9 +336,9 @@ fn run_tasks(
             }
         }
 
-        gate::clear_progress();
+        crate::log::set_progress(None);
         jsonio::save(state_path, state)?;
-        crate::debug_log!(
+        crate::debug!(
             "verify phase finished in {} ms",
             started.elapsed().as_millis()
         );
@@ -349,27 +350,27 @@ fn run_tasks(
 fn evaluate(path: &Path, want_size: u64, want_sha: &str, progress: &AtomicU64) -> Verdict {
     match std::fs::metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Verdict::plain(CheckState::Missing),
-        Err(e) => Verdict::with_detail(CheckState::Unreadable, vec![format!("reason: {e}")]),
+        Err(e) => Verdict::with_detail(CheckState::Unreadable, vec![format!("Reason: {e}")]),
         Ok(m) if !m.is_file() => {
-            Verdict::with_detail(CheckState::Unreadable, vec!["reason: not a regular file".into()])
+            Verdict::with_detail(CheckState::Unreadable, vec!["Reason: not a regular file".into()])
         }
         // 大小不符直接判失败, 不再算哈希
         Ok(m) if m.len() != want_size => Verdict::with_detail(
             CheckState::Fail,
             vec![
-                format!("expected: {want_size}"),
-                format!("actual:   {}", m.len()),
+                format!("Expected: {want_size}"),
+                format!("Actual:   {}", m.len()),
             ],
         ),
         Ok(_) => match hashing::hash_file(path, Algorithm::Sha256, progress) {
-            Err(e) => Verdict::with_detail(CheckState::Unreadable, vec![format!("reason: {e}")]),
+            Err(e) => Verdict::with_detail(CheckState::Unreadable, vec![format!("Reason: {e}")]),
             Ok((actual, _)) => {
                 if actual == want_sha {
                     Verdict::plain(CheckState::Pass)
                 } else {
                     Verdict::mismatch(vec![
-                        format!("expected: {want_sha}"),
-                        format!("actual:   {actual}"),
+                        format!("Expected: {want_sha}"),
+                        format!("Actual:   {actual}"),
                     ])
                 }
             }

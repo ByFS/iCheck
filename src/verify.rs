@@ -33,15 +33,13 @@ pub fn run(root: &Path) -> Result<Outcome> {
     let anchor_hash: AnchorHash = jsonio::load(&hash_path)?
         .ok_or_else(|| Error::Data(format!("{} not found", hash_path.display())))?;
 
-    println!("INFO: Start quick check");
-    println!(
-        "INFO: Source: {}",
+    crate::info!(
+        "Source: {}",
         crate::upstream::Platform::display_for(&index.source.platform)
     );
-    println!("INFO: Model ID: {}", index.source.model_id);
-    println!("INFO: Load anchor index");
-    println!("INFO: Files: {} (anchor)", anchor_hash.files.len());
-    println!();
+    crate::info!("Model ID: {}", index.source.model_id);
+    crate::info!("Anchor: {}", report::files(anchor_hash.files.len()));
+    crate::log::blank();
 
     // 1 集合级比对, 只 stat 不读字节
     let mut slots: Vec<Slot> = Vec::with_capacity(anchor_hash.files.len());
@@ -59,7 +57,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
                 broken_rows.push(Row::with_detail(
                     "[UNREADABLE]",
                     &f.name,
-                    vec![format!("reason: {e}")],
+                    vec![format!("Reason: {e}")],
                 ));
                 slots.push(Slot::Broken);
             }
@@ -67,17 +65,17 @@ pub fn run(root: &Path) -> Result<Outcome> {
                 broken_rows.push(Row::with_detail(
                     "[UNREADABLE]",
                     &f.name,
-                    vec!["reason: not a regular file".to_string()],
+                    vec!["Reason: not a regular file".to_string()],
                 ));
                 slots.push(Slot::Broken);
             }
             Ok(m) if m.len() != f.size => {
                 broken_rows.push(Row::with_detail(
-                    "[SIZE-MISMATCH]",
+                    "[FAIL]",
                     &f.name,
                     vec![
-                        format!("expected: {}", f.size),
-                        format!("actual:   {}", m.len()),
+                        format!("Expected: {}", f.size),
+                        format!("Actual:   {}", m.len()),
                     ],
                 ));
                 slots.push(Slot::Broken);
@@ -102,7 +100,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
             added_rows.push(Row::with_detail(
                 "[ADDED]",
                 &entry.name,
-                vec![format!("size: {}", entry.size)],
+                vec![format!("Size: {}", entry.size)],
             ));
         }
     }
@@ -114,28 +112,27 @@ pub fn run(root: &Path) -> Result<Outcome> {
     let added = added_rows.len();
     let problems = broken + added;
 
-    if !broken_rows.is_empty() || !added_rows.is_empty() {
-        report::print_rows(&broken_rows);
-        report::print_rows(&added_rows);
+    let shown = report::print_rows(&broken_rows) + report::print_rows(&added_rows);
+    if shown > 0 {
         println!();
     }
     if problems > 0 {
-        println!("INFO: Quick check found {problems} problem(s), start verification");
+        crate::info!("Quick check: {broken} failed, {added} added, starting verification");
     } else {
-        println!("INFO: Quick check passed, start verification");
+        crate::info!("Quick check passed, starting verification");
     }
-    println!();
+    crate::log::blank();
 
     // 2 只对大小一致的文件算 BLAKE3
     let total_bytes: u64 = jobs.iter().map(|j| j.size).sum();
-    crate::debug_log!(
-        "quick check: {broken} broken, {added} added; hashing {} file(s), {:.2} GB",
-        jobs.len(),
+    crate::debug!(
+        "quick check: {broken} broken, {added} added; hashing {}, {:.2} GB",
+        report::files(jobs.len()),
         total_bytes as f64 / 1e9
     );
     let hashing_started = std::time::Instant::now();
     let digests = pool::hash_all(&jobs, Algorithm::Blake3);
-    crate::debug_log!(
+    crate::debug!(
         "hashing finished in {} ms",
         hashing_started.elapsed().as_millis()
     );
@@ -152,7 +149,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
         };
         match &digests[job] {
             Some(hex) if *hex == f.blake3 => {
-                rows.push(Row::new("[OK]", &f.name));
+                rows.push(Row::new("[PASS]", &f.name));
                 passed += 1;
             }
             Some(hex) => {
@@ -160,8 +157,8 @@ pub fn run(root: &Path) -> Result<Outcome> {
                     "[FAIL]",
                     &f.name,
                     vec![
-                        format!("expected: {}", f.blake3),
-                        format!("actual:   {hex}"),
+                        format!("Expected: {}", f.blake3),
+                        format!("Actual:   {hex}"),
                     ],
                 ));
                 hash_failed += 1;
@@ -171,13 +168,13 @@ pub fn run(root: &Path) -> Result<Outcome> {
                 rows.push(Row::with_detail(
                     "[UNREADABLE]",
                     &f.name,
-                    vec!["reason: read failed".to_string()],
+                    vec!["Reason: read failed".to_string()],
                 ));
                 hash_failed += 1;
             }
         }
     }
-    report::print_rows(&rows);
+    let shown = report::print_rows(&rows);
 
     let total = anchor_hash.files.len();
     let failed = broken + hash_failed;
@@ -190,9 +187,11 @@ pub fn run(root: &Path) -> Result<Outcome> {
     if added > 0 {
         pairs.push(("Added", added.to_string()));
     }
-    pairs.push(("Anchor", index_path.display().to_string()));
+    pairs.push(("State", index_path.display().to_string()));
 
-    println!();
+    if shown > 0 {
+        println!();
+    }
     report::print_summary(&pairs, if failed == 0 { "PASS" } else { "FAIL" });
 
     Ok(Outcome {

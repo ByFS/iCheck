@@ -23,7 +23,7 @@ pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     value.serialize(&mut ser)?;
     buf.push(b'\n');
     let result = write_atomic(path, &buf);
-    crate::debug_log!(
+    crate::debug!(
         "save {} ({} bytes): {}",
         path.display(),
         buf.len(),

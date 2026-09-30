@@ -20,11 +20,12 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         Error::Data(format!("{} not found, run check first", official_path.display()))
     })?;
 
-    println!(
-        "INFO: Source: {}",
+    crate::info!(
+        "Source: {}",
         crate::upstream::Platform::display_for(&official.source.platform)
     );
-    println!("INFO: Model ID: {}", official.source.model_id);
+    crate::info!("Model ID: {}", official.source.model_id);
+    crate::log::blank();
 
     // 前置: 官方校验必须全部通过, 否则拒绝建立锚点
     // 锚点的含义是"这个目录是经过官方校验的快照", 锚一个残缺集合会让它语义变浑
@@ -37,26 +38,29 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
     if !bad.is_empty() {
         if !force {
             let rows: Vec<Row> = bad.iter().map(|f| Row::new(f.check.tag(), &f.name)).collect();
-            println!("INFO: Checking model");
-            println!();
-            crate::report::print_rows(&rows);
-            println!();
-            println!("Files: {}", official.files.len());
-            println!("Passed: {}", official.files.len() - bad.len());
-            println!("Failed: {}", bad.len());
-            println!();
-            println!("Result: FAIL");
-            println!();
-            println!("INFO: Refuse to anchor: official check has not fully passed");
-            println!("      Re-run with -f to anchor anyway");
+            crate::info!("Checking model");
+            crate::log::blank();
+            if crate::report::print_rows(&rows) > 0 {
+                println!();
+            }
+            crate::report::print_summary(
+                &[
+                    ("Files", official.files.len().to_string()),
+                    ("Passed", (official.files.len() - bad.len()).to_string()),
+                    ("Failed", bad.len().to_string()),
+                ],
+                "FAIL",
+            );
+            crate::log::blank();
+            crate::warn!("Refusing to anchor: the official check has not fully passed");
+            crate::warn!("Re-run with -f to anchor anyway");
             return Ok(Outcome { failed: bad.len() });
         }
 
         // -f 已经是在明确接受不完美的前提下强行建锚点, 不再展开统计与逐条清单
-        println!();
-        println!(
-            "WARN: -f, skipping the official check for {} entry(ies)",
-            bad.len()
+        crate::warn!(
+            "-f, skipping the official check ({} not passed)",
+            format!("{} of {}", bad.len(), crate::report::files(official.files.len()))
         );
     }
 
@@ -64,7 +68,7 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
     let excluded = walk::default_excluded();
     let walked = walk::walk(root, &excluded)?;
     let total_bytes: u64 = walked.iter().map(|e| e.size).sum();
-    crate::debug_log!(
+    crate::debug!(
         "walk: {} local files, {:.2} GB; official: {} entries, {} passed, excluded {:?}",
         walked.len(),
         total_bytes as f64 / 1e9,
@@ -73,14 +77,13 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         excluded
     );
 
-    println!("INFO: Files: {} (local directory)", walked.len());
-    println!(
-        "INFO: Computing {} ({} file(s), {:.2} GB)",
+    crate::info!("Local files: {}", walked.len());
+    crate::info!(
+        "Computing {}: {}, {:.2} GB",
         Algorithm::Blake3.name(),
-        walked.len(),
+        crate::report::files(walked.len()),
         total_bytes as f64 / 1e9
     );
-    println!();
 
     let jobs: Vec<Job> = walked
         .iter()
@@ -91,10 +94,12 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         .collect();
     let hashing_started = std::time::Instant::now();
     let digests = pool::hash_all(&jobs, Algorithm::Blake3);
-    crate::debug_log!(
+    crate::debug!(
         "hashing finished in {} ms",
         hashing_started.elapsed().as_millis()
     );
+
+    crate::log::blank();
 
     let mut files: Vec<AnchorFile> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
@@ -109,14 +114,12 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         }
     }
 
-    // 只在有问题时逐条列出, 算过的文件不刷屏 —— 清单与哈希都在 JSON 里
-    if !unreadable.is_empty() {
-        let rows: Vec<Row> = unreadable
-            .iter()
-            .map(|name| Row::new("[UNREADABLE]", name))
-            .collect();
-        crate::report::print_rows(&rows);
-    }
+    // 算过的文件不刷屏, 清单与哈希都在 JSON 里; 有问题才逐条列出来
+    let rows: Vec<Row> = unreadable
+        .iter()
+        .map(|name| Row::new("[UNREADABLE]", name))
+        .collect();
+    let shown = crate::report::print_rows(&rows);
 
     let now = crate::now_rfc3339();
 
@@ -156,8 +159,11 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         ("Passed", anchor_hash.files.len().to_string()),
         ("Failed", failed.to_string()),
     ];
-    pairs.push(("Anchor", anchor::index_path(root).display().to_string()));
+    pairs.push(("State", anchor::index_path(root).display().to_string()));
 
+    if shown > 0 {
+        println!();
+    }
     crate::report::print_summary(&pairs, if failed == 0 { "PASS" } else { "FAIL" });
 
     Ok(Outcome { failed })

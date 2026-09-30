@@ -1,4 +1,3 @@
-use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -13,6 +12,9 @@ const MIN_WINDOW_BYTES: u64 = 64 << 20;
 
 /// 开工前探测多少字节
 const PROBE_BYTES: usize = 32 << 20;
+
+/// 少于这个量就不报速率, 计时的粒度撑不住
+const MIN_PROBE_BYTES: usize = 1 << 20;
 
 struct Inner {
     active: usize,
@@ -71,9 +73,7 @@ impl Drop for Permit<'_> {
     }
 }
 
-/// 并发控制器
-///
-/// 一次开工前的探测结果
+/// 一次开工前的探测结果, 只用于报告
 pub struct Probe {
     /// 单线程顺序读的带宽, 字节/秒
     pub read_bps: f64,
@@ -83,10 +83,12 @@ pub struct Probe {
 
 /// 读一个真实文件的前 PROBE_BYTES 字节, 测出读带宽与单线程哈希率
 ///
-/// 为什么实测而不是按存储类型猜: 并发数的正确取值是 `读带宽 / 单线程哈希率`。
-/// 盘能给 3 GB/s 而 BLAKE3 单线程也 3 GB/s 时, 一个 worker 就饱和了;
-/// 页缓存能给 12 GB/s 时才需要多个。这个比值只有量出来才知道,
-/// 而且它自带缓存语义 —— 数据在页缓存里就读得快, 本来也该开更多并发
+/// 为什么要量: 单线程的读带宽与哈希率决定了一个 worker 能跑多快,
+/// 而这两个数只有实测才知道, 按存储类型猜一定会错
+/// 它还自带缓存语义 —— 数据在页缓存里就读得快, 本来也该开更多并发
+///
+/// 注意它**只用于报告**: 量的是单流顺序读, 而并发读会把访问模式打成随机,
+/// 用它算并发数会在生产机上猜错(见 report_rates)
 pub fn probe(path: &Path, algo: Algorithm) -> Option<Probe> {
     use std::io::Read;
 
@@ -102,7 +104,9 @@ pub fn probe(path: &Path, algo: Algorithm) -> Option<Probe> {
         }
     }
     let read_secs = started.elapsed().as_secs_f64();
-    if filled == 0 || read_secs <= 0.0 {
+    // 文件太小的话测得的是计时噪声, 报 0.00 GB/s 比不报更误导
+    if filled < MIN_PROBE_BYTES || read_secs <= 0.0 {
+        crate::debug!("probe {}: only {filled} bytes, too small to measure", path.display());
         return None;
     }
     let read_bps = filled as f64 / read_secs;
@@ -115,7 +119,7 @@ pub fn probe(path: &Path, algo: Algorithm) -> Option<Probe> {
     }
     let hash_bps = filled as f64 / hash_secs;
 
-    crate::debug_log!(
+    crate::debug!(
         "probe {}: read {} MiB in {} ms ({:.2} GB/s), {} in {} ms ({:.2} GB/s)",
         path.display(),
         filled >> 20,
@@ -132,33 +136,30 @@ pub fn probe(path: &Path, algo: Algorithm) -> Option<Probe> {
 /// 开工前量两个数, **只用于报告**
 ///
 /// 刻意不用它决定并发数: 它量的是**单流顺序读**, 而并发读会把访问模式打成随机,
-/// 有效带宽可能掉一个数量级 —— 生产机上实测过, 240 个 worker 把顺序读的 0.77 GB/s
-/// 打成了约 90 MB/s, 并发越大反而越慢。
-/// 所以从 1 开始, 由 Governor 按**真实并发下的吞吐**向上爬
+/// 有效带宽可能掉一个数量级 —— 所以从 1 开始, 由 Governor 按真实并发下的吞吐向上爬
 pub fn report_rates(largest: Option<&Path>, algo: Algorithm, cores: usize) {
     match largest.and_then(|p| probe(p, algo)) {
-        Some(p) => println!(
-            "INFO: Measured: sequential read {:.2} GB/s, {} {:.2} GB/s per thread",
+        Some(p) => crate::info!(
+            "Measured: sequential read {:.2} GB/s, {} {:.2} GB/s per thread",
             p.read_bps / 1e9,
             algo.name(),
             p.hash_bps / 1e9
         ),
-        None => println!("INFO: Measured: probe unavailable"),
+        None => crate::info!("Measured: probe unavailable"),
     }
     if cores <= 1 {
-        println!("INFO: Workers: 1 (single core)");
+        crate::info!("Workers: 1 (single core)");
     } else {
-        println!("INFO: Workers: start at 1 of {cores} cores, raised while throughput improves");
+        crate::info!("Workers: start at 1 of {cores} cores, raised while throughput improves");
     }
-    println!();
 }
 
 /// 运行中的自适应控制器
 ///
-/// 初始值由 `calibrate` 实测给出, 之后用一个带回退的爬山确认:
-/// 先在初始值处测一窗作为基准, 再翻倍试一窗 —— 吞吐真的改善就继续翻倍,
-/// 持平或变差就退回并停手。**"持平"必须当成到达平台期, 不能继续加**,
-/// 否则在存储已饱和时会一路加到核数上限, 白白浪费核心。
+/// 从 1 开始, 用带回退的爬山找并发数:
+/// 先测一窗作为基准, 再翻倍试一窗 —— 吞吐真的改善就继续翻倍,
+/// 持平或变差就退回并停手, **"持平"必须当成到达平台期, 不能继续加**,
+/// 否则在存储已饱和时会一路加到核数上限, 白白浪费核心
 /// 窗口至少 1 秒且至少读到 64 MiB(最多 3 秒); 窗口内没有读到任何字节时不动
 pub struct Governor {
     workers: usize,
@@ -211,7 +212,7 @@ impl Governor {
 
         // 一点进展都没有: 只等, 不下调
         if progressed == 0 {
-            crate::debug_log!("window {:.2}s: no progress, holding", elapsed.as_secs_f64());
+            crate::debug!("window {:.2}s: no progress, holding", elapsed.as_secs_f64());
             self.last_tick = Instant::now();
             return true;
         }
@@ -262,7 +263,7 @@ impl Governor {
             }
         }
 
-        crate::debug_log!(
+        crate::debug!(
             "window {:.2}s, {} MiB, {:.3} GB/s, limit {before} -> {} ({decision})",
             elapsed.as_secs_f64(),
             progressed >> 20,
@@ -291,8 +292,7 @@ pub fn max_workers() -> usize {
         .unwrap_or(4)
 }
 
-/// 进度走 stderr, 用 \r 覆盖同一行, 不污染重定向到文件的 stdout
-/// 只有 stderr 是终端时才打: 否则会把转义序列写进日志
+/// 进度只给 log 提供内容, 何时画, 怎么清, 非终端怎么办都由 log 决定
 ///
 /// 带上速率是刻意的: 判断"瓶颈在存储还是 CPU"就看它 ——
 /// 速率贴着存储的实测读带宽, 瓶颈在存储; 明显低于它, 瓶颈在 CPU
@@ -304,9 +304,6 @@ pub fn print_progress(
     limit: usize,
     rate_bps: f64,
 ) {
-    if !std::io::stderr().is_terminal() {
-        return;
-    }
     let pct = if total_bytes > 0 {
         bytes as f64 / total_bytes as f64 * 100.0
     } else {
@@ -317,17 +314,11 @@ pub fn print_progress(
     } else {
         String::new()
     };
-    eprint!(
-        "\r\x1b[2K  [{done}/{total}] {:.2}/{:.2} GB ({pct:.1}%){rate}  workers: {limit}",
+    crate::log::set_progress(Some(format!(
+        "  [{done}/{total}] {:.2}/{:.2} GB ({pct:.1}%){rate}  workers: {limit}",
         bytes as f64 / 1e9,
         total_bytes as f64 / 1e9
-    );
-}
-
-pub fn clear_progress() {
-    if std::io::stderr().is_terminal() {
-        eprint!("\r\x1b[2K");
-    }
+    )));
 }
 
 /// 读字节计数器

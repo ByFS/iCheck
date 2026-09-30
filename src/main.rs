@@ -1,11 +1,11 @@
 mod anchor;
 mod check;
-mod debug;
 mod error;
 mod gate;
 mod generate;
 mod hashing;
 mod jsonio;
+mod log;
 mod official;
 mod pool;
 mod report;
@@ -34,9 +34,9 @@ fn main() -> ExitCode {
     // --debug 是全局开关, 从任何位置拿走, 不参与各命令的参数解析
     if let Some(pos) = args.iter().position(|a| a == "--debug") {
         args.remove(pos);
-        debug::enable();
-        debug_log!("argv: icheck {}", args.join(" "));
-        debug_log!(
+        log::enable_debug();
+        crate::debug!("argv: icheck {}", args.join(" "));
+        crate::debug!(
             "build: {}, cores: {}, ICHECK_WORKERS: {}",
             if cfg!(debug_assertions) { "debug (unoptimized)" } else { "release" },
             std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
@@ -47,7 +47,7 @@ fn main() -> ExitCode {
     match dispatch(&args) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("ERROR: {e}");
+            crate::error!("{e}");
             ExitCode::from(e.exit_code())
         }
     }
@@ -55,14 +55,10 @@ fn main() -> ExitCode {
 
 fn dispatch(args: &[String]) -> Result<ExitCode> {
     let Some(command) = args.first() else {
-        print_help();
-        return Ok(ExitCode::from(2));
+        return Err(Error::Usage(
+            "no command given, run `icheck --help` for usage".to_string(),
+        ));
     };
-
-    match command.as_str() {
-        "check" | "generate" | "verify" => warn_unoptimized(),
-        _ => {}
-    }
 
     match command.as_str() {
         "check" => {
@@ -78,16 +74,19 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
             })?;
             let model_id = positional[2].clone();
 
+            warn_unoptimized();
             let outcome = check::run(&root, platform, &model_id, revision.as_deref())?;
             Ok(finish(outcome.failed, outcome.hash_mismatch))
         }
         "generate" => {
             let (root, force) = path_and_flags(&args[1..], "generate", true)?;
+            warn_unoptimized();
             let outcome = generate::run(&root, force)?;
             Ok(finish(outcome.failed, 0))
         }
         "verify" => {
             let (root, _) = path_and_flags(&args[1..], "verify", false)?;
+            warn_unoptimized();
             let outcome = verify::run(&root)?;
             Ok(finish(outcome.failed, outcome.hash_mismatch))
         }
@@ -106,11 +105,11 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
 /// debug 构建下哈希慢约 20 倍, 而从输出里完全看不出来 —— 开工前直接说破
 ///
 /// 生产机上跑过 debug 二进制, 单线程 SHA-256 只有 0.03 GB/s, 被误当成存储或
-/// CPU 配额的问题查了很久。所以这里主动提示, 免得再踩
+/// CPU 配额的问题查了很久, 所以这里主动提示, 免得再踩
 fn warn_unoptimized() {
     #[cfg(debug_assertions)]
-    println!(
-        "WARN: unoptimized build, hashing runs roughly 20x slower; rebuild with `cargo build --release`"
+    crate::warn!(
+        "unoptimized build, hashing runs roughly 20x slower; rebuild with `cargo build --release`"
     );
 }
 
@@ -191,7 +190,7 @@ fn print_help() {
     println!("  0  all good");
     println!("  1  set-level differences only (missing / size / added / unreadable)");
     println!("  2  at least one content hash mismatch");
-    println!("  3  tool, upstream or data failure");
+    println!("  3  tool, upstream, data or usage failure");
     println!();
     println!("Environment:");
     println!("  ICHECK_WORKERS  hard limit on worker threads (default: cores, tuned at runtime)");
