@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::upstream::{Entry, Platform};
 
-pub const TOOL: &str = concat!("icheck ", env!("CARGO_PKG_VERSION"));
-
 /// files[].check 的取值
 /// pending 是唯一未判定的状态; 其余都是终态
 /// "文件已校验完成" 定义为: 不存在 pending 条目
@@ -86,7 +84,7 @@ impl OfficialHash {
         files.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
 
         OfficialHash {
-            tool: TOOL.to_string(),
+            tool: crate::TOOL.to_string(),
             fetched_at: crate::now_rfc3339(),
             source: Source {
                 platform: platform.as_str().to_string(),

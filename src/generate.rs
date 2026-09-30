@@ -4,7 +4,7 @@ use crate::anchor::{self, AnchorFile, AnchorHash, AnchorIndex, Summary};
 use crate::error::{Error, Result};
 use crate::hashing::Algorithm;
 use crate::jsonio;
-use crate::official::{self, CheckState, FileEntry, OfficialHash};
+use crate::official::{CheckState, FileEntry, OfficialHash};
 use crate::pool::{self, Job};
 use crate::report::Row;
 use crate::walk;
@@ -135,7 +135,7 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
 
     // 先写 anchor_hash
     let anchor_hash = AnchorHash {
-        tool: official::TOOL.to_string(),
+        tool: crate::TOOL.to_string(),
         computed_at: now.clone(),
         files,
     };
@@ -147,7 +147,7 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         .map(|p| p.created_at)
         .unwrap_or_else(|| now.clone());
     let index = AnchorIndex {
-        tool: official::TOOL.to_string(),
+        tool: crate::TOOL.to_string(),
         created_at,
         updated_at: now,
         official_hash: anchor::OFFICIAL_REL.to_string(),

@@ -18,6 +18,9 @@ use std::process::ExitCode;
 use error::{Error, Result};
 use upstream::Platform;
 
+/// 工具名与版本, 同时用于 --version 与落入 JSON 的 tool 字段
+pub const TOOL: &str = concat!("icheck ", env!("CARGO_PKG_VERSION"));
+
 pub fn now_rfc3339() -> String {
     chrono::Local::now()
         .format("%Y-%m-%dT%H:%M:%S%:z")
@@ -70,6 +73,10 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
         }
         "-h" | "--help" | "help" => {
             print_help();
+            Ok(ExitCode::SUCCESS)
+        }
+        "-v" | "--version" | "version" => {
+            println!("{TOOL}");
             Ok(ExitCode::SUCCESS)
         }
         other => Err(Error::Usage(format!("unknown command: {other}"))),
@@ -144,6 +151,7 @@ fn print_help() {
     println!();
     println!("Options:");
     println!("  -h, --help      show this help");
+    println!("  -v, --version   show the version");
     println!("  -f, --force     generate: anchor even if the official check has not fully passed");
     println!("                  only the precondition is relaxed, official_hash is left untouched");
     println!();
