@@ -14,9 +14,6 @@ pub struct Outcome {
     pub failed: usize,
 }
 
-/// -f 时最多列出这么多条未通过项, 避免刷屏
-const FORCE_LIST_LIMIT: usize = 20;
-
 pub fn run(root: &Path, force: bool) -> Result<Outcome> {
     let official_path = anchor::official_path(root);
     let official: OfficialHash = jsonio::load(&official_path)?.ok_or_else(|| {
@@ -55,34 +52,12 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
             return Ok(Outcome { failed: bad.len() });
         }
 
-        let count = |s: CheckState| bad.iter().filter(|f| f.check == s).count();
+        // -f 已经是在明确接受不完美的前提下强行建锚点, 不再展开统计与逐条清单
         println!();
         println!(
-            "WARN: -f, skipping the precondition: {} entry(ies) did not pass the official check",
+            "WARN: -f, skipping the official check for {} entry(ies)",
             bad.len()
         );
-        println!(
-            "      missing:    {} (not on disk, will NOT be covered by the anchor, so verify cannot catch them)",
-            count(CheckState::Missing)
-        );
-        println!(
-            "      fail:       {} (anchored as-is, without official backing)",
-            count(CheckState::Fail)
-        );
-        println!(
-            "      unreadable: {} (may also fail to hash)",
-            count(CheckState::Unreadable)
-        );
-        println!();
-        let shown = bad.len().min(FORCE_LIST_LIMIT);
-        let rows: Vec<Row> = bad[..shown]
-            .iter()
-            .map(|f| Row::new(f.check.tag(), &f.name))
-            .collect();
-        crate::report::print_rows(&rows);
-        if shown < bad.len() {
-            println!("        ... {} more", bad.len() - shown);
-        }
     }
 
     // 遍历本地目录
@@ -156,7 +131,8 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         source: official.source.clone(),
         summary: Summary {
             total_files: anchor_hash.files.len(),
-            official_files: official.files.len(),
+            // 只有 pass 的条目才算有官方背书: fail 的字节与官方不符, missing 的没被锚定
+            official_files: official.count(CheckState::Pass),
             blake3_files: anchor_hash.files.len(),
         },
     };
@@ -168,9 +144,6 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         ("Passed", anchor_hash.files.len().to_string()),
         ("Failed", failed.to_string()),
     ];
-    if force && !bad.is_empty() {
-        pairs.push(("Forced", format!("{} (no official backing)", bad.len())));
-    }
     pairs.push(("Anchor", anchor::index_path(root).display().to_string()));
 
     println!();
