@@ -73,16 +73,31 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     println!("INFO: Model ID: {model_id}");
     println!("INFO: Obtain model information");
 
+    let fetch_started = Instant::now();
     let manifest = upstream::fetch(platform, model_id, revision)?;
+    crate::debug_log!("fetch finished in {} ms", fetch_started.elapsed().as_millis());
 
     println!("INFO: Files: {} (upstream manifest)", manifest.entries.len());
 
     let prev: Option<OfficialHash> = jsonio::load(&state_path)?;
+    crate::debug_log!(
+        "state {}: {}",
+        state_path.display(),
+        match &prev {
+            None => "absent, fresh run".to_string(),
+            Some(p) => format!(
+                "present, {} entries, complete={}",
+                p.files.len(),
+                p.is_complete()
+            ),
+        }
+    );
 
     // 续跑只在上次中断时成立
     // 上次跑完了再跑就是一次新的校验, 一律从新快照重来
     // 否则会在文件被改过之后谎报 PASS
     let resuming = prev.as_ref().is_some_and(|p| !p.is_complete());
+    crate::debug_log!("resuming: {resuming}");
 
     let mut state = if resuming {
         let p = prev.as_ref().unwrap();
@@ -122,6 +137,12 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     }
 
     let total_bytes: u64 = tasks.iter().map(|t| t.size).sum();
+    crate::debug_log!(
+        "{} entries: {skipped} skipped, {} to verify, {:.2} GB expected",
+        state.files.len(),
+        tasks.len(),
+        total_bytes as f64 / 1e9
+    );
 
     println!();
     println!("INFO: Checking model");
@@ -225,6 +246,7 @@ fn run_tasks(
 ) -> Result<usize> {
     let workers = gate::max_workers();
     let largest = tasks.iter().max_by_key(|t| t.size).map(|t| t.path.as_path());
+    let started = Instant::now();
     gate::report_rates(largest, Algorithm::Sha256, workers);
     let gate = Gate::new(1);
     let mut governor = Governor::new(workers, 1);
@@ -270,6 +292,16 @@ fn run_tasks(
         while received < tasks.len() {
             match rx.recv_timeout(POLL) {
                 Ok((idx, v)) => {
+                    if v.detail.is_empty() {
+                        crate::debug_log!("{} {}", v.state.tag(), state.files[idx].name);
+                    } else {
+                        crate::debug_log!(
+                            "{} {}  {}",
+                            v.state.tag(),
+                            state.files[idx].name,
+                            v.detail.join(" | ")
+                        );
+                    }
                     state.files[idx].check = v.state;
                     if v.hash_mismatch {
                         hash_mismatch += 1;
@@ -305,6 +337,10 @@ fn run_tasks(
 
         gate::clear_progress();
         jsonio::save(state_path, state)?;
+        crate::debug_log!(
+            "verify phase finished in {} ms",
+            started.elapsed().as_millis()
+        );
         Ok(hash_mismatch)
     })
 }

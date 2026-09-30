@@ -22,7 +22,14 @@ pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
     value.serialize(&mut ser)?;
     buf.push(b'\n');
-    write_atomic(path, &buf)
+    let result = write_atomic(path, &buf);
+    crate::debug_log!(
+        "save {} ({} bytes): {}",
+        path.display(),
+        buf.len(),
+        if result.is_ok() { "ok" } else { "failed" }
+    );
+    result
 }
 
 /// 写临时文件 -> fsync -> 原子改名 -> fsync 目录

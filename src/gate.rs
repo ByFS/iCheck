@@ -115,6 +115,17 @@ pub fn probe(path: &Path, algo: Algorithm) -> Option<Probe> {
     }
     let hash_bps = filled as f64 / hash_secs;
 
+    crate::debug_log!(
+        "probe {}: read {} MiB in {} ms ({:.2} GB/s), {} in {} ms ({:.2} GB/s)",
+        path.display(),
+        filled >> 20,
+        (read_secs * 1000.0) as u64,
+        read_bps / 1e9,
+        algo.name(),
+        (hash_secs * 1000.0) as u64,
+        hash_bps / 1e9,
+    );
+
     Some(Probe { read_bps, hash_bps })
 }
 
@@ -200,12 +211,15 @@ impl Governor {
 
         // 一点进展都没有: 只等, 不下调
         if progressed == 0 {
+            crate::debug_log!("window {:.2}s: no progress, holding", elapsed.as_secs_f64());
             self.last_tick = Instant::now();
             return true;
         }
 
         let rate = progressed as f64 / elapsed.as_secs_f64();
         self.last_rate = rate;
+        let before = self.limit;
+        let mut decision = "settled";
 
         if !self.settled {
             match self.baseline {
@@ -216,8 +230,10 @@ impl Governor {
                     if self.limit < self.workers {
                         self.limit = (self.limit * 2).min(self.workers);
                         gate.set_limit(self.limit);
+                        decision = "baseline";
                     } else {
                         self.settled = true;
+                        decision = "already at core count";
                     }
                 }
                 Some(base) => {
@@ -228,8 +244,10 @@ impl Governor {
                         if self.limit < self.workers {
                             self.limit = (self.limit * 2).min(self.workers);
                             gate.set_limit(self.limit);
+                            decision = "improved";
                         } else {
                             self.settled = true;
+                            decision = "at core count";
                         }
                     } else {
                         // 持平或变差: 退回上一档, 到此为止
@@ -238,10 +256,19 @@ impl Governor {
                             gate.set_limit(self.limit);
                         }
                         self.settled = true;
+                        decision = "no gain, retreat and settle";
                     }
                 }
             }
         }
+
+        crate::debug_log!(
+            "window {:.2}s, {} MiB, {:.3} GB/s, limit {before} -> {} ({decision})",
+            elapsed.as_secs_f64(),
+            progressed >> 20,
+            rate / 1e9,
+            self.limit
+        );
 
         self.last_tick = Instant::now();
         self.last_bytes = bytes_now;

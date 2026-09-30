@@ -127,7 +127,18 @@ pub fn run(root: &Path) -> Result<Outcome> {
     println!();
 
     // 2 只对大小一致的文件算 BLAKE3
+    let total_bytes: u64 = jobs.iter().map(|j| j.size).sum();
+    crate::debug_log!(
+        "quick check: {broken} broken, {added} added; hashing {} file(s), {:.2} GB",
+        jobs.len(),
+        total_bytes as f64 / 1e9
+    );
+    let hashing_started = std::time::Instant::now();
     let digests = pool::hash_all(&jobs, Algorithm::Blake3);
+    crate::debug_log!(
+        "hashing finished in {} ms",
+        hashing_started.elapsed().as_millis()
+    );
 
     // 3 逐条输出, 按 name 顺序
     let mut rows: Vec<Row> = Vec::new();

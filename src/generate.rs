@@ -64,6 +64,14 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
     let excluded = walk::default_excluded();
     let walked = walk::walk(root, &excluded)?;
     let total_bytes: u64 = walked.iter().map(|e| e.size).sum();
+    crate::debug_log!(
+        "walk: {} local files, {:.2} GB; official: {} entries, {} passed, excluded {:?}",
+        walked.len(),
+        total_bytes as f64 / 1e9,
+        official.files.len(),
+        official.count(CheckState::Pass),
+        excluded
+    );
 
     println!("INFO: Files: {} (local directory)", walked.len());
     println!(
@@ -81,7 +89,12 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
             size: e.size,
         })
         .collect();
+    let hashing_started = std::time::Instant::now();
     let digests = pool::hash_all(&jobs, Algorithm::Blake3);
+    crate::debug_log!(
+        "hashing finished in {} ms",
+        hashing_started.elapsed().as_millis()
+    );
 
     let mut files: Vec<AnchorFile> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();

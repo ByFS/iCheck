@@ -1,5 +1,6 @@
 mod anchor;
 mod check;
+mod debug;
 mod error;
 mod gate;
 mod generate;
@@ -28,7 +29,21 @@ pub fn now_rfc3339() -> String {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+
+    // --debug 是全局开关, 从任何位置拿走, 不参与各命令的参数解析
+    if let Some(pos) = args.iter().position(|a| a == "--debug") {
+        args.remove(pos);
+        debug::enable();
+        debug_log!("argv: icheck {}", args.join(" "));
+        debug_log!(
+            "build: {}, cores: {}, ICHECK_WORKERS: {}",
+            if cfg!(debug_assertions) { "debug (unoptimized)" } else { "release" },
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),
+            std::env::var("ICHECK_WORKERS").unwrap_or_else(|_| "unset".to_string())
+        );
+    }
+
     match dispatch(&args) {
         Ok(code) => code,
         Err(e) => {
@@ -168,6 +183,7 @@ fn print_help() {
     println!("Options:");
     println!("  -h, --help      show this help");
     println!("  -v, --version   show the version");
+    println!("  --debug         print detailed diagnostics (timings, windows, per-file verdicts)");
     println!("  -f, --force     generate: anchor even if the official check has not fully passed");
     println!("                  only the precondition is relaxed, official_hash is left untouched");
     println!();

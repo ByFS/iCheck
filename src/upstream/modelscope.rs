@@ -43,15 +43,25 @@ struct FileItem {
 /// 本工具不用 HEAD(不落 revision), 所以不需要做短 SHA 还原
 pub fn fetch(model_id: &str, revision: Option<&str>) -> Result<Manifest> {
     let url = format!("{ENDPOINT}/{model_id}/repo/files");
+    let rev = revision.unwrap_or("master");
+    crate::debug_log!("GET {url} (Revision={rev}, Recursive=true)");
+
+    let started = std::time::Instant::now();
     let resp = ureq::get(&url)
-        .query("Revision", revision.unwrap_or("master"))
+        .query("Revision", rev)
         .query("Recursive", "true")
         .call()
         .map_err(|e| Error::Http(format!("{url}: {e}")))?;
+    crate::debug_log!(
+        "http {} in {} ms",
+        resp.status(),
+        started.elapsed().as_millis()
+    );
 
     let body = resp
         .into_string()
         .map_err(|e| Error::Http(format!("failed to read the response: {e}")))?;
+    crate::debug_log!("body {} bytes", body.len());
     let parsed: Resp = serde_json::from_str(&body)?;
 
     if !parsed.success || parsed.code != 200 {
@@ -66,16 +76,23 @@ pub fn fetch(model_id: &str, revision: Option<&str>) -> Result<Manifest> {
         .data
         .ok_or_else(|| Error::Upstream("response has no Data field".to_string()))?;
 
+    let raw = data.files.len();
     let mut entries = Vec::new();
+    let mut no_hash = 0usize;
+    let mut dirs = 0usize;
     for item in data.files {
         // Files[] 里同时含文件与目录, 只取 blob
         if item.kind != "blob" {
+            dirs += 1;
             continue;
         }
         // 上游获取不到哈希的不进结构
         let sha256 = match item.sha256 {
             Some(s) if !s.trim().is_empty() => s.trim().to_ascii_lowercase(),
-            _ => continue,
+            _ => {
+                no_hash += 1;
+                continue;
+            }
         };
         entries.push(Entry {
             name: item.path,
@@ -88,6 +105,10 @@ pub fn fetch(model_id: &str, revision: Option<&str>) -> Result<Manifest> {
             sha256,
         });
     }
+    crate::debug_log!(
+        "parsed {raw} entries: {} blobs kept, {dirs} directories skipped, {no_hash} without sha256",
+        entries.len()
+    );
 
     if entries.is_empty() {
         return Err(Error::Upstream("manifest is empty".to_string()));
