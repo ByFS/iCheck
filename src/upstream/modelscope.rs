@@ -51,7 +51,7 @@ pub fn fetch(model_id: &str, revision: Option<&str>) -> Result<Manifest> {
 
     let body = resp
         .into_string()
-        .map_err(|e| Error::Http(format!("读取响应失败: {e}")))?;
+        .map_err(|e| Error::Http(format!("failed to read the response: {e}")))?;
     let parsed: Resp = serde_json::from_str(&body)?;
 
     if !parsed.success || parsed.code != 200 {
@@ -64,7 +64,7 @@ pub fn fetch(model_id: &str, revision: Option<&str>) -> Result<Manifest> {
 
     let data = parsed
         .data
-        .ok_or_else(|| Error::Upstream("响应缺少 Data 字段".to_string()))?;
+        .ok_or_else(|| Error::Upstream("response has no Data field".to_string()))?;
 
     let mut entries = Vec::new();
     for item in data.files {
@@ -90,7 +90,7 @@ pub fn fetch(model_id: &str, revision: Option<&str>) -> Result<Manifest> {
     }
 
     if entries.is_empty() {
-        return Err(Error::Upstream("清单为空".to_string()));
+        return Err(Error::Upstream("manifest is empty".to_string()));
     }
     Ok(Manifest { entries })
 }

@@ -20,14 +20,14 @@ const FORCE_LIST_LIMIT: usize = 20;
 pub fn run(root: &Path, force: bool) -> Result<Outcome> {
     let official_path = anchor::official_path(root);
     let official: OfficialHash = jsonio::load(&official_path)?.ok_or_else(|| {
-        Error::Data(format!("找不到 {}, 请先运行 check", official_path.display()))
+        Error::Data(format!("{} not found, run check first", official_path.display()))
     })?;
 
     println!(
         "INFO: Source: {}",
         crate::upstream::Platform::display_for(&official.source.platform)
     );
-    println!("INFO: Model_id: {}", official.source.model_id);
+    println!("INFO: Model ID: {}", official.source.model_id);
 
     // 前置: 官方校验必须全部通过, 否则拒绝建立锚点
     // 锚点的含义是"这个目录是经过官方校验的快照", 锚一个残缺集合会让它语义变浑
@@ -90,7 +90,7 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
     let walked = walk::walk(root, &excluded)?;
     let total_bytes: u64 = walked.iter().map(|e| e.size).sum();
 
-    println!("INFO: Files: {} (local)", walked.len());
+    println!("INFO: Files: {} (local directory)", walked.len());
     println!(
         "INFO: Computing {} ({} file(s), {:.2} GB)",
         Algorithm::Blake3.name(),
@@ -121,11 +121,11 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
         }
     }
 
-    // cli.md 的格式: 每个文件三行
+    // 每个文件三行, 字段顺序与 check 一致
     for f in &files {
         println!("INFO: name: {}", f.name);
-        println!("INFO: BLAKE3: {}", f.blake3);
         println!("INFO: size: {}", f.size);
+        println!("INFO: blake3: {}", f.blake3);
     }
     for name in &unreadable {
         println!("[UNREADABLE] {name}");
@@ -163,17 +163,18 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
     jsonio::save(&anchor::index_path(root), &index)?;
 
     let failed = unreadable.len();
-    println!();
-    println!("Files: {}", anchor_hash.files.len() + failed);
-    println!("Anchored: {}", anchor_hash.files.len());
-    println!("Failed: {failed}");
+    let mut pairs: Vec<(&str, String)> = vec![
+        ("Files", (anchor_hash.files.len() + failed).to_string()),
+        ("Passed", anchor_hash.files.len().to_string()),
+        ("Failed", failed.to_string()),
+    ];
     if force && !bad.is_empty() {
-        println!("Forced: {} (no official backing)", bad.len());
+        pairs.push(("Forced", format!("{} (no official backing)", bad.len())));
     }
+    pairs.push(("Anchor", anchor::index_path(root).display().to_string()));
+
     println!();
-    println!("Result: {}", if failed == 0 { "PASS" } else { "FAIL" });
-    println!();
-    println!("INFO: Anchor: {}", anchor::index_path(root).display());
+    crate::report::print_summary(&pairs, if failed == 0 { "PASS" } else { "FAIL" });
 
     Ok(Outcome { failed })
 }

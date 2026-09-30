@@ -5,6 +5,8 @@ use std::fmt;
 ///   1 跑完但有非 pass 条目
 ///   2 用法错误
 ///   3 工具 / 上游 / 数据故障
+/// 退出码(工具 / 上游 / 用法 / 数据故障一律为 3)
+/// 0 通过 / 1 仅集合级差异 / 2 内容不符 由各命令按 Outcome 返回, 不在这里
 #[derive(Debug)]
 pub enum Error {
     Usage(String),
@@ -18,21 +20,18 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     pub fn exit_code(&self) -> u8 {
-        match self {
-            Error::Usage(_) => 2,
-            _ => 3,
-        }
+        3
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Usage(m) => write!(f, "用法错误: {m}"),
-            Error::Http(m) => write!(f, "请求上游失败: {m}"),
-            Error::Upstream(m) => write!(f, "上游返回异常: {m}"),
-            Error::Data(m) => write!(f, "数据格式错误: {m}"),
-            Error::Io(e) => write!(f, "IO 错误: {e}"),
+            Error::Usage(m) => write!(f, "{m}"),
+            Error::Http(m) => write!(f, "request to upstream failed: {m}"),
+            Error::Upstream(m) => write!(f, "unexpected upstream response: {m}"),
+            Error::Data(m) => write!(f, "bad data: {m}"),
+            Error::Io(e) => write!(f, "io error: {e}"),
         }
     }
 }

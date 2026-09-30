@@ -118,7 +118,7 @@ impl Governor {
 }
 
 /// 默认并发上限真正的并发数由 Gate 在运行中自适应, 这里只是线程数上限
-/// 可用 ICHECK_WORKERS 硬指定 —— 自动控制在混合存储/特殊挂载上一定会猜错
+/// 可用 ICHECK_WORKERS 硬指定, 自动控制在混合存储/特殊挂载上一定会猜错
 pub fn max_workers() -> usize {
     if let Ok(v) = std::env::var("ICHECK_WORKERS") {
         if let Ok(n) = v.trim().parse::<usize>() {
@@ -144,7 +144,7 @@ pub fn print_progress(done: usize, total: usize, bytes: u64, total_bytes: u64, l
         0.0
     };
     eprint!(
-        "\r\x1b[2K  [{done}/{total}] {:.2}/{:.2} GB ({pct:.1}%)  workers={limit}",
+        "\r\x1b[2K  [{done}/{total}] {:.2}/{:.2} GB ({pct:.1}%)  workers: {limit}",
         bytes as f64 / 1e9,
         total_bytes as f64 / 1e9
     );

@@ -10,8 +10,10 @@ use crate::report::{self, Row};
 use crate::walk;
 
 pub struct Outcome {
-    /// 非通过项与多余文件之和, 决定退出码
+    /// 集合级差异与内容不符之和, 决定退出码 多余文件不计入
     pub failed: usize,
+    /// 其中"内容哈希不符"的条数, 用于与"仅集合级差异"区分退出码
+    pub hash_mismatch: usize,
 }
 
 /// 集合级比对之后, 每个 anchor 条目的去向
@@ -25,16 +27,20 @@ enum Slot {
 pub fn run(root: &Path) -> Result<Outcome> {
     let index_path = anchor::index_path(root);
     let index: AnchorIndex = jsonio::load(&index_path)?.ok_or_else(|| {
-        Error::Data(format!("找不到 {}, 请先运行 generate", index_path.display()))
+        Error::Data(format!("{} not found, run generate first", index_path.display()))
     })?;
     let hash_path = root.join(&index.anchor_hash);
-    let anchor_hash: AnchorHash =
-        jsonio::load(&hash_path)?.ok_or_else(|| Error::Data(format!("找不到 {}", hash_path.display())))?;
+    let anchor_hash: AnchorHash = jsonio::load(&hash_path)?
+        .ok_or_else(|| Error::Data(format!("{} not found", hash_path.display())))?;
 
     println!("INFO: Start quick check");
-    println!("INFO: Model_id: {}", index.source.model_id);
+    println!(
+        "INFO: Source: {}",
+        crate::upstream::Platform::display_for(&index.source.platform)
+    );
+    println!("INFO: Model ID: {}", index.source.model_id);
     println!("INFO: Load anchor index");
-    println!("INFO: Files: {}", anchor_hash.files.len());
+    println!("INFO: Files: {} (anchor)", anchor_hash.files.len());
     println!();
 
     // 1 集合级比对, 只 stat 不读字节
@@ -127,6 +133,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
     let mut rows: Vec<Row> = Vec::new();
     let mut passed = 0usize;
     let mut hash_failed = 0usize;
+    let mut hash_mismatch = 0usize;
     for (f, slot) in anchor_hash.files.iter().zip(slots.iter()) {
         let job = match slot {
             Slot::Hash(i) => *i,
@@ -147,6 +154,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
                     ],
                 ));
                 hash_failed += 1;
+                hash_mismatch += 1;
             }
             None => {
                 rows.push(Row::with_detail(
@@ -163,22 +171,21 @@ pub fn run(root: &Path) -> Result<Outcome> {
     let total = anchor_hash.files.len();
     let failed = broken + hash_failed;
 
-    println!();
-    println!("Files: {total}");
-    println!("Passed: {passed}");
-    println!("Failed: {failed}");
+    let mut pairs: Vec<(&str, String)> = vec![
+        ("Files", total.to_string()),
+        ("Passed", passed.to_string()),
+        ("Failed", failed.to_string()),
+    ];
     if added > 0 {
-        println!("Added: {added}");
+        pairs.push(("Added", added.to_string()));
     }
+    pairs.push(("Anchor", index_path.display().to_string()));
+
     println!();
-    println!(
-        "Result: {}",
-        if failed == 0 && added == 0 { "PASS" } else { "FAIL" }
-    );
-    println!();
-    println!("INFO: Anchor: {}", index_path.display());
+    report::print_summary(&pairs, if failed == 0 { "PASS" } else { "FAIL" });
 
     Ok(Outcome {
-        failed: failed + added,
+        failed,
+        hash_mismatch,
     })
 }

@@ -31,7 +31,7 @@ pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path
         .parent()
-        .ok_or_else(|| Error::Data(format!("路径没有父目录: {}", path.display())))?;
+        .ok_or_else(|| Error::Data(format!("path has no parent directory: {}", path.display())))?;
     fs::create_dir_all(dir)?;
 
     let name = path

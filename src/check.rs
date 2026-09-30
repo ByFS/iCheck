@@ -20,6 +20,8 @@ const POLL: Duration = Duration::from_millis(200);
 pub struct Outcome {
     /// 非 pass 的条目数, 决定退出码
     pub failed: usize,
+    /// 其中"内容哈希不符"的条数, 用于与"仅集合级差异"区分退出码
+    pub hash_mismatch: usize,
 }
 
 struct Task {
@@ -34,6 +36,8 @@ struct Verdict {
     state: CheckState,
     /// 只在非 pass 时给, 逐行展开在结果块里的文件行下面
     detail: Vec<String>,
+    /// 这次失败是"内容哈希不符"而不是"大小不符 / 读不了"
+    hash_mismatch: bool,
 }
 
 impl Verdict {
@@ -41,11 +45,24 @@ impl Verdict {
         Verdict {
             state,
             detail: Vec::new(),
+            hash_mismatch: false,
         }
     }
 
     fn with_detail(state: CheckState, detail: Vec<String>) -> Self {
-        Verdict { state, detail }
+        Verdict {
+            state,
+            detail,
+            hash_mismatch: false,
+        }
+    }
+
+    fn mismatch(detail: Vec<String>) -> Self {
+        Verdict {
+            state: CheckState::Fail,
+            detail,
+            hash_mismatch: true,
+        }
     }
 }
 
@@ -53,17 +70,18 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     let state_path = official::path_in(root);
 
     println!("INFO: Source: {}", platform.display_name());
-    println!("INFO: Model_id: {model_id}");
+    println!("INFO: Model ID: {model_id}");
     println!("INFO: Obtain model information");
 
     let manifest = upstream::fetch(platform, model_id, revision)?;
 
-    println!("INFO: Files: {}", manifest.entries.len());
+    println!("INFO: Files: {} (upstream manifest)", manifest.entries.len());
     println!("INFO: Start obtaining information");
 
     let prev: Option<OfficialHash> = jsonio::load(&state_path)?;
 
-    // 续跑只在上次中断时成立。上次跑完了再跑就是一次新的校验, 一律从新快照重来 ——
+    // 续跑只在上次中断时成立
+    // 上次跑完了再跑就是一次新的校验, 一律从新快照重来
     // 否则会在文件被改过之后谎报 PASS
     let resuming = prev.as_ref().is_some_and(|p| !p.is_complete());
 
@@ -124,13 +142,17 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     println!();
 
     let mut details: HashMap<usize, Vec<String>> = HashMap::new();
+    let mut hash_mismatch = 0usize;
     if !tasks.is_empty() {
-        run_tasks(&mut state, &tasks, total_bytes, &state_path, &mut details)?;
+        hash_mismatch = run_tasks(&mut state, &tasks, total_bytes, &state_path, &mut details)?;
     }
 
     let failed = report(&state, &details, &state_path);
 
-    Ok(Outcome { failed })
+    Ok(Outcome {
+        failed,
+        hash_mismatch,
+    })
 }
 
 /// 结果报告, 跳过重算的路径和正常跑完的路径共用
@@ -152,25 +174,31 @@ fn report(state: &OfficialHash, details: &HashMap<usize, Vec<String>>, state_pat
     }
     report::print_rows(&rows);
     if !list_all {
-        println!("{:8} ... {pass} passed file(s) not listed", "");
+        println!(
+            "{:width$} ... {pass} passed file(s) not listed",
+            "",
+            width = report::TAG_WIDTH
+        );
     }
 
     println!();
-    println!("Files: {total}");
-    println!("Passed: {pass}");
-    println!("Failed: {failed}");
-    println!();
-    println!("Result: {}", if failed == 0 { "PASS" } else { "FAIL" });
-    println!();
-    println!("INFO: Anchor: {}", state_path.display());
+    report::print_summary(
+        &[
+            ("Files", total.to_string()),
+            ("Passed", pass.to_string()),
+            ("Failed", failed.to_string()),
+            ("Anchor", state_path.display().to_string()),
+        ],
+        if failed == 0 { "PASS" } else { "FAIL" },
+    );
     failed
 }
 
-/// 续跑前确认上游快照没变按哈希清单比对, 不依赖平台的 revision 语义
+/// 续跑前确认上游快照没变, 按哈希清单比对, 不依赖平台的 revision 语义
 fn verify_same_snapshot(prev: &OfficialHash, manifest: &Manifest) -> Result<()> {
     if prev.files.len() != manifest.entries.len() {
         return Err(Error::Upstream(format!(
-            "上游清单条目数从 {} 变成 {}, 无法续跑, 请确认 --revision, 或删除 official_hash.json 后重新开始",
+            "manifest entry count changed from {} to {}, cannot resume; check --revision, or delete official_hash.json and start over",
             prev.files.len(),
             manifest.entries.len()
         )));
@@ -181,13 +209,13 @@ fn verify_same_snapshot(prev: &OfficialHash, manifest: &Manifest) -> Result<()> 
         match prev_map.remove(e.name.as_str()) {
             None => {
                 return Err(Error::Upstream(format!(
-                    "上游新增了 {}, 无法续跑, 请确认 --revision, 或删除 official_hash.json 后重新开始",
+                    "upstream added {}, cannot resume; check --revision, or delete official_hash.json and start over",
                     e.name
                 )));
             }
             Some(p) if p.sha256 != e.sha256 => {
                 return Err(Error::Upstream(format!(
-                    "上游已更新: {} 的 sha256 与记录不一致, 无法续跑, 请确认 --revision, 或删除 official_hash.json 后重新开始",
+                    "upstream changed: sha256 of {} differs from the record, cannot resume; check --revision, or delete official_hash.json and start over",
                     e.name
                 )));
             }
@@ -203,7 +231,7 @@ fn run_tasks(
     total_bytes: u64,
     state_path: &Path,
     details: &mut HashMap<usize, Vec<String>>,
-) -> Result<()> {
+) -> Result<usize> {
     let workers = gate::max_workers();
     let gate = Gate::new(1);
     let mut governor = Governor::new(workers);
@@ -211,7 +239,7 @@ fn run_tasks(
     // 连续计量"实际读到的字节", 控制器与进度都用它
     let bytes_read = AtomicU64::new(0);
 
-    std::thread::scope(|scope| -> Result<()> {
+    std::thread::scope(|scope| -> Result<usize> {
         let (tx, rx) = mpsc::channel::<(usize, Verdict)>();
 
         for _ in 0..workers {
@@ -244,11 +272,15 @@ fn run_tasks(
         let mut received = 0usize;
         let mut since_flush = 0usize;
         let mut last_flush = Instant::now();
+        let mut hash_mismatch = 0usize;
 
         while received < tasks.len() {
             match rx.recv_timeout(POLL) {
                 Ok((idx, v)) => {
                     state.files[idx].check = v.state;
+                    if v.hash_mismatch {
+                        hash_mismatch += 1;
+                    }
                     if !v.detail.is_empty() {
                         details.insert(idx, v.detail);
                     }
@@ -273,7 +305,7 @@ fn run_tasks(
 
         gate::clear_progress();
         jsonio::save(state_path, state)?;
-        Ok(())
+        Ok(hash_mismatch)
     })
 }
 
@@ -299,13 +331,10 @@ fn evaluate(path: &Path, want_size: u64, want_sha: &str, progress: &AtomicU64) -
                 if actual == want_sha {
                     Verdict::plain(CheckState::Pass)
                 } else {
-                    Verdict::with_detail(
-                        CheckState::Fail,
-                        vec![
-                            format!("expected: {want_sha}"),
-                            format!("actual:   {actual}"),
-                        ],
-                    )
+                    Verdict::mismatch(vec![
+                        format!("expected: {want_sha}"),
+                        format!("actual:   {actual}"),
+                    ])
                 }
             }
         },

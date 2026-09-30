@@ -29,7 +29,7 @@ fn main() -> ExitCode {
     match dispatch(&args) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("错误: {e}");
+            eprintln!("ERROR: {e}");
             ExitCode::from(e.exit_code())
         }
     }
@@ -46,39 +46,42 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
             let (positional, revision) = split_args(&args[1..])?;
             if positional.len() != 3 {
                 return Err(Error::Usage(
-                    "check 需要 <path> <source> <author>/<model>".to_string(),
+                    "check requires <path> <source> <author>/<model>".to_string(),
                 ));
             }
             let root = PathBuf::from(&positional[0]);
             let platform = Platform::parse(&positional[1]).ok_or_else(|| {
-                Error::Usage(format!("未知的 source: {} (目前只支持 ms)", positional[1]))
+                Error::Usage(format!("unknown source: {} (only ms is supported)", positional[1]))
             })?;
             let model_id = positional[2].clone();
 
             let outcome = check::run(&root, platform, &model_id, revision.as_deref())?;
-            Ok(finish(outcome.failed))
+            Ok(finish(outcome.failed, outcome.hash_mismatch))
         }
         "generate" => {
             let (root, force) = path_and_flags(&args[1..], "generate", true)?;
             let outcome = generate::run(&root, force)?;
-            Ok(finish(outcome.failed))
+            Ok(finish(outcome.failed, 0))
         }
         "verify" => {
             let (root, _) = path_and_flags(&args[1..], "verify", false)?;
             let outcome = verify::run(&root)?;
-            Ok(finish(outcome.failed))
+            Ok(finish(outcome.failed, outcome.hash_mismatch))
         }
         "-h" | "--help" | "help" => {
             print_help();
             Ok(ExitCode::SUCCESS)
         }
-        other => Err(Error::Usage(format!("未知的命令: {other}"))),
+        other => Err(Error::Usage(format!("unknown command: {other}"))),
     }
 }
 
-fn finish(failed: usize) -> ExitCode {
+/// 退出码: 0 通过 / 1 仅集合级差异 / 2 内容不符 / 3 工具或数据故障(见 error)
+fn finish(failed: usize, hash_mismatch: usize) -> ExitCode {
     if failed == 0 {
         ExitCode::SUCCESS
+    } else if hash_mismatch > 0 {
+        ExitCode::from(2)
     } else {
         ExitCode::from(1)
     }
@@ -93,14 +96,14 @@ fn path_and_flags(args: &[String], command: &str, allow_force: bool) -> Result<(
         match a.as_str() {
             "-f" | "--force" if allow_force => force = true,
             other if other.starts_with('-') => {
-                return Err(Error::Usage(format!("{command} 不认识的选项: {other}")));
+                return Err(Error::Usage(format!("{command}: unknown option {other}")));
             }
             other => positional.push(other.to_string()),
         }
     }
 
     if positional.len() != 1 {
-        return Err(Error::Usage(format!("{command} 需要 <path>")));
+        return Err(Error::Usage(format!("{command} requires <path>")));
     }
     Ok((Path::new(&positional[0]).to_path_buf(), force))
 }
@@ -114,7 +117,7 @@ fn split_args(args: &[String]) -> Result<(Vec<String>, Option<String>)> {
         if a == "--revision" {
             let v = it
                 .next()
-                .ok_or_else(|| Error::Usage("--revision 需要一个值".to_string()))?;
+                .ok_or_else(|| Error::Usage("--revision requires a value".to_string()))?;
             revision = Some(v.clone());
         } else {
             positional.push(a.clone());
@@ -124,20 +127,32 @@ fn split_args(args: &[String]) -> Result<(Vec<String>, Option<String>)> {
 }
 
 fn print_help() {
-    println!("iCheck - AI 模型完整性校验");
+    println!("iCheck - AI model integrity checker");
     println!();
-    println!("用法:");
+    println!("Usage:");
     println!("  icheck check <path> <source> <author>/<model> [--revision <rev>]");
     println!("  icheck generate <path> [-f|--force]");
     println!("  icheck verify <path>");
     println!();
-    println!("source:");
+    println!("Commands:");
+    println!("  check      fetch upstream hashes and verify the local model");
+    println!("  generate   build the local anchor from official_hash.json");
+    println!("  verify     verify the local model against the anchor");
+    println!();
+    println!("Source:");
     println!("  ms   ModelScope");
     println!();
-    println!("选项:");
-    println!("  -f, --force   generate 时忽略官方校验未通过的条目, 强制建立锚点");
-    println!("                只放开前置检查, 不改写 official_hash 里的状态");
+    println!("Options:");
+    println!("  -h, --help      show this help");
+    println!("  -f, --force     generate: anchor even if the official check has not fully passed");
+    println!("                  only the precondition is relaxed, official_hash is left untouched");
     println!();
-    println!("环境变量:");
-    println!("  ICHECK_WORKERS  硬指定并发线程上限(默认取可用核数, 运行中自适应)");
+    println!("Exit codes:");
+    println!("  0  all good");
+    println!("  1  set-level differences only (missing / size / added / unreadable)");
+    println!("  2  at least one content hash mismatch");
+    println!("  3  tool, upstream or data failure");
+    println!();
+    println!("Environment:");
+    println!("  ICHECK_WORKERS  hard limit on worker threads (default: cores, tuned at runtime)");
 }
