@@ -44,6 +44,16 @@ fn main() -> ExitCode {
         );
     }
 
+    // 问用法的人经常把 -h 写在命令后面, 所以这三个也当全局开关接住
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        print_help();
+        return ExitCode::SUCCESS;
+    }
+    if args.iter().any(|a| a == "-v" || a == "--version") {
+        println!("{TOOL}");
+        return ExitCode::SUCCESS;
+    }
+
     match dispatch(&args) {
         Ok(code) => code,
         Err(e) => {
@@ -90,15 +100,15 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
             let outcome = verify::run(&root)?;
             Ok(finish(outcome.failed, outcome.hash_mismatch))
         }
-        "-h" | "--help" | "help" => {
+        "help" => {
             print_help();
             Ok(ExitCode::SUCCESS)
         }
-        "-v" | "--version" | "version" => {
+        "version" => {
             println!("{TOOL}");
             Ok(ExitCode::SUCCESS)
         }
-        other => Err(Error::Usage(format!("unknown command: {other}"))),
+        other => Err(unknown_command(other)),
     }
 }
 
@@ -113,7 +123,74 @@ fn warn_unoptimized() {
     );
 }
 
-/// 退出码: 0 通过 / 1 仅集合级差异 / 2 内容不符 / 3 工具或数据故障(见 error)
+/// 提示用的词表
+const COMMANDS: [&str; 4] = ["check", "generate", "verify", "help"];
+const OPTIONS: [&str; 8] = [
+    "-h", "--help", "-v", "--version", "--debug", "-f", "--force", "--revision",
+];
+/// 只在某个命令下有意义的选项, 用错了就直接说清它属于谁
+const COMMAND_ONLY: [(&str, &str); 3] = [
+    ("-f", "generate"),
+    ("--force", "generate"),
+    ("--revision", "check"),
+];
+const HELP_HINT: &str = "run `icheck --help` for usage";
+
+/// 命令名打错时的提示
+fn unknown_command(got: &str) -> Error {
+    Error::Usage(match suggest(got, &COMMANDS) {
+        Some(s) => format!("unknown command: {got}, did you mean `{s}`?"),
+        None => format!("unknown command: {got}, {HELP_HINT}"),
+    })
+}
+
+/// 选项不认识的提示: 先看它是不是别的命令的选项, 再猜最接近的那个
+fn unknown_option(command: &str, got: &str) -> Error {
+    if let Some((_, owner)) = COMMAND_ONLY.iter().find(|(o, _)| *o == got) {
+        return Error::Usage(format!(
+            "{command}: unknown option {got}, it only applies to {owner}"
+        ));
+    }
+    Error::Usage(match suggest(got, &OPTIONS) {
+        Some(s) => format!("{command}: unknown option {got}, did you mean `{s}`?"),
+        None => format!("{command}: unknown option {got}, {HELP_HINT}"),
+    })
+}
+
+/// 最接近的候选, 差太远就不猜
+///
+/// 一两个字符的选项也不猜: `-x` 到 `-f` 的距离同样是 1, 猜了只会误导
+fn suggest<'a>(got: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    if got.chars().count() < 3 {
+        return None;
+    }
+    candidates
+        .iter()
+        .map(|c| (*c, edit_distance(got, c)))
+        .filter(|(c, d)| *d <= 2 && *d * 2 < c.chars().count())
+        .min_by_key(|(_, d)| *d)
+        .map(|(c, _)| c)
+}
+
+/// 编辑距离, 只用来判断"是不是打错了", 输入都很短
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// 退出码: 0 通过 / 1 仅集合级差异 / 2 内容不符 / 3 工具, 上游, 数据或用法故障(见 error)
 fn finish(failed: usize, hash_mismatch: usize) -> ExitCode {
     if failed == 0 {
         ExitCode::SUCCESS
@@ -133,7 +210,7 @@ fn path_and_flags(args: &[String], command: &str, allow_force: bool) -> Result<(
         match a.as_str() {
             "-f" | "--force" if allow_force => force = true,
             other if other.starts_with('-') => {
-                return Err(Error::Usage(format!("{command}: unknown option {other}")));
+                return Err(unknown_option(command, other));
             }
             other => positional.push(other.to_string()),
         }
@@ -156,6 +233,9 @@ fn split_args(args: &[String]) -> Result<(Vec<String>, Option<String>)> {
                 .next()
                 .ok_or_else(|| Error::Usage("--revision requires a value".to_string()))?;
             revision = Some(v.clone());
+        } else if a.starts_with('-') {
+            // 选项跟在位置参数后面时最容易打错, 不能默默当成路径收下
+            return Err(unknown_option("check", a));
         } else {
             positional.push(a.clone());
         }
