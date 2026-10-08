@@ -71,6 +71,14 @@ fn run(args: &[&str]) -> Output {
         .expect("failed to run icheck")
 }
 
+fn run_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(BIN)
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("failed to run icheck")
+}
+
 fn code(o: &Output) -> i32 {
     o.status.code().expect("icheck was killed by a signal")
 }
@@ -172,6 +180,74 @@ fn verify_reports_missing_and_added() {
     // 多余的文件不算失败, 只单独计数
     assert_eq!(summary(&out, "Failed").as_deref(), Some("1"));
     assert_eq!(summary(&out, "Added").as_deref(), Some("1"));
+}
+
+/// 省掉路径: 站在模型目录里直接 verify
+#[test]
+fn verify_without_a_path_uses_the_current_directory() {
+    let root = model("cwd", None);
+    assert_eq!(code(&run(&["generate", root_of(&root)])), 0);
+
+    let v = run_in(&root, &["verify"]);
+    assert_eq!(code(&v), 0, "{}", stderr(&v));
+    assert!(stderr(&v).contains("INFO: Root: "), "{}", stderr(&v));
+    assert_eq!(summary(&stdout(&v), "Result").as_deref(), Some("PASS"));
+}
+
+/// 站在子目录里也能找到模型根
+#[test]
+fn verify_walks_up_to_the_model_root() {
+    let root = model("walkup", None);
+    assert_eq!(code(&run(&["generate", root_of(&root)])), 0);
+
+    let v = run_in(&root.join("sub"), &["verify"]);
+    assert_eq!(code(&v), 0, "{}", stderr(&v));
+    assert_eq!(summary(&stdout(&v), "Result").as_deref(), Some("PASS"));
+}
+
+/// 首次 check 缺模型 ID: 报错要带一条能直接复制的命令
+#[test]
+fn the_first_check_error_contains_a_runnable_command() {
+    let root = scratch("first-check").join("deepseek-ai/DeepSeek-V4.1-Flash");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("config.json"), b"{}").unwrap();
+
+    let c = run(&["check", root_of(&root)]);
+    assert_eq!(code(&c), 3);
+    let msg = stderr(&c);
+    assert!(msg.contains("the first time"), "{msg}");
+    assert!(msg.contains("--source modelscope"), "{msg}");
+    assert!(msg.contains("deepseek-ai/DeepSeek-V4.1-Flash"), "{msg}");
+}
+
+/// 来源名打错
+#[test]
+fn a_bad_source_suggests_the_closest_one() {
+    let c = run(&["check", "/tmp", "--source", "modelscop"]);
+    assert_eq!(code(&c), 3);
+    assert!(
+        stderr(&c).contains("did you mean `modelscope`?"),
+        "{}",
+        stderr(&c)
+    );
+}
+
+/// 官方记录来自某个平台时, 不许命令行悄悄换成另一个
+#[test]
+fn switching_the_source_on_an_existing_record_is_refused() {
+    let root = model("switch", None);
+    let c = run(&["check", root_of(&root), "--source", "hf"]);
+    assert_eq!(code(&c), 3);
+    let msg = stderr(&c);
+    assert!(msg.contains("cannot switch"), "{msg}");
+}
+
+/// 路径不存在要在发请求之前就拦住
+#[test]
+fn a_missing_path_is_refused_before_any_request() {
+    let v = run(&["verify", "/no/such/model/dir"]);
+    assert_eq!(code(&v), 3);
+    assert!(stderr(&v).contains("no such directory"), "{}", stderr(&v));
 }
 
 /// 锚点里带能跳出模型目录的路径时必须直接拒绝, 而不是照着去读

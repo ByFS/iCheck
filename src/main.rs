@@ -1,5 +1,6 @@
 mod anchor;
 mod check;
+mod cli;
 mod error;
 mod gate;
 mod generate;
@@ -14,7 +15,6 @@ mod upstream;
 mod verify;
 mod walk;
 
-use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use error::{Error, Result};
@@ -73,30 +73,34 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
 
     match command.as_str() {
         "check" => {
-            let (positional, revision) = split_args(&args[1..])?;
-            if positional.len() != 3 {
-                return Err(Error::Usage(
-                    "check requires <path> <source> <author>/<model>".to_string(),
-                ));
+            let (positional, revision, source) = check_args(&args[1..])?;
+            if positional.len() > 2 {
+                return Err(Error::Usage(too_many_args(&positional)));
             }
-            let root = PathBuf::from(&positional[0]);
-            let platform = Platform::parse(&positional[1]).ok_or_else(|| {
-                Error::Usage(format!("unknown source: {}, use ms or hf", positional[1]))
-            })?;
-            let model_id = positional[2].clone();
+            let root = cli::resolve_root(positional.first().map(String::as_str))?;
+            let (model_id, platform) = cli::resolve_check(
+                &root,
+                positional.get(1).map(String::as_str),
+                source,
+            )?;
 
+            crate::info!("Root: {}", root.display());
             warn_unoptimized();
             let outcome = check::run(&root, platform, &model_id, revision.as_deref())?;
             Ok(finish(outcome.failed, outcome.hash_mismatch))
         }
         "generate" => {
-            let (root, force) = path_and_flags(&args[1..], "generate", true)?;
+            let (path, force) = path_and_flags(&args[1..], "generate", true)?;
+            let root = cli::resolve_root(path.as_deref())?;
+            crate::info!("Root: {}", root.display());
             warn_unoptimized();
             let outcome = generate::run(&root, force)?;
             Ok(finish(outcome.failed, 0))
         }
         "verify" => {
-            let (root, _) = path_and_flags(&args[1..], "verify", false)?;
+            let (path, _) = path_and_flags(&args[1..], "verify", false)?;
+            let root = cli::resolve_root(path.as_deref())?;
+            crate::info!("Root: {}", root.display());
             warn_unoptimized();
             let outcome = verify::run(&root)?;
             Ok(finish(outcome.failed, outcome.hash_mismatch))
@@ -126,14 +130,17 @@ fn warn_unoptimized() {
 
 /// 提示用的词表
 const COMMANDS: [&str; 4] = ["check", "generate", "verify", "help"];
-const OPTIONS: [&str; 8] = [
-    "-h", "--help", "-v", "--version", "--debug", "-f", "--force", "--revision",
+const OPTIONS: [&str; 9] = [
+    "-h", "--help", "-v", "--version", "--debug", "-f", "--force", "--revision", "--source",
 ];
+/// 来源名, 打错时用来提示
+const SOURCES: [&str; 4] = ["ms", "modelscope", "hf", "huggingface"];
 /// 只在某个命令下有意义的选项, 用错了就直接说清它属于谁
-const COMMAND_ONLY: [(&str, &str); 3] = [
+const COMMAND_ONLY: [(&str, &str); 4] = [
     ("-f", "generate"),
     ("--force", "generate"),
     ("--revision", "check"),
+    ("--source", "check"),
 ];
 const HELP_HINT: &str = "run `icheck --help` for usage";
 
@@ -142,6 +149,33 @@ fn unknown_command(got: &str) -> Error {
     Error::Usage(match suggest(got, &COMMANDS) {
         Some(s) => format!("unknown command: {got}, did you mean `{s}`?"),
         None => format!("unknown command: {got}, {HELP_HINT}"),
+    })
+}
+
+/// check 的位置参数给多了
+///
+/// 最常见的多给一个就是旧写法 `check <path> <source> <model>`: 来源已经改成 --source,
+/// 所以这里要认出来并给出新写法, 否则老习惯会撞在一句干巴巴的"参数太多"上
+fn too_many_args(positional: &[String]) -> String {
+    if let Some(platform) = positional.get(1).and_then(|v| Platform::parse(v)) {
+        return format!(
+            "check takes <path> and <author>/<model>, the platform moved to an option, try: icheck check {} --source {} {}",
+            positional[0],
+            platform.as_str(),
+            positional[2..].join(" ")
+        );
+    }
+    format!(
+        "check takes at most <path> and <author>/<model>, got {} arguments",
+        positional.len()
+    )
+}
+
+/// 来源名打错时的提示
+fn unknown_source(got: &str) -> Error {
+    Error::Usage(match suggest(got, &SOURCES) {
+        Some(s) => format!("unknown source: {got}, did you mean `{s}`?"),
+        None => format!("unknown source: {got}, use ms or hf"),
     })
 }
 
@@ -202,8 +236,12 @@ fn finish(failed: usize, hash_mismatch: usize) -> ExitCode {
     }
 }
 
-/// generate / verify 只收一个路径参数
-fn path_and_flags(args: &[String], command: &str, allow_force: bool) -> Result<(PathBuf, bool)> {
+/// generate / verify 最多收一个路径, 省掉就用当前目录往上找
+fn path_and_flags(
+    args: &[String],
+    command: &str,
+    allow_force: bool,
+) -> Result<(Option<String>, bool)> {
     let mut positional = Vec::new();
     let mut force = false;
 
@@ -217,40 +255,60 @@ fn path_and_flags(args: &[String], command: &str, allow_force: bool) -> Result<(
         }
     }
 
-    if positional.len() != 1 {
-        return Err(Error::Usage(format!("{command} requires <path>")));
+    if positional.len() > 1 {
+        return Err(Error::Usage(format!(
+            "{command} takes at most one <path>, got {} arguments",
+            positional.len()
+        )));
     }
-    Ok((Path::new(&positional[0]).to_path_buf(), force))
+    Ok((positional.into_iter().next(), force))
 }
 
-/// 位置参数与 --revision 分离
-fn split_args(args: &[String]) -> Result<(Vec<String>, Option<String>)> {
+/// check 最多收两个位置参数(路径 / 模型 ID), 外加 --source 与 --revision
+///
+/// 来源改成选项而不是位置参数: 路径与模型 ID 都能省掉之后, "第一个位置参数到底是
+/// 路径还是来源"就说不清了
+fn check_args(args: &[String]) -> Result<(Vec<String>, Option<String>, Option<Platform>)> {
     let mut positional = Vec::new();
     let mut revision = None;
+    let mut source = None;
     let mut it = args.iter();
+
     while let Some(a) = it.next() {
-        if a == "--revision" {
-            let v = it
-                .next()
-                .ok_or_else(|| Error::Usage("--revision requires a value".to_string()))?;
-            revision = Some(v.clone());
-        } else if a.starts_with('-') {
+        match a.as_str() {
+            "--revision" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| Error::Usage("--revision requires a value".to_string()))?;
+                revision = Some(v.clone());
+            }
+            "--source" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| Error::Usage("--source requires a value".to_string()))?;
+                source = Some(Platform::parse(v).ok_or_else(|| unknown_source(v))?);
+            }
             // 选项跟在位置参数后面时最容易打错, 不能默默当成路径收下
-            return Err(unknown_option("check", a));
-        } else {
-            positional.push(a.clone());
+            other if other.starts_with('-') => return Err(unknown_option("check", other)),
+            other => positional.push(other.to_string()),
         }
     }
-    Ok((positional, revision))
+    Ok((positional, revision, source))
 }
 
 fn print_help() {
     println!("iCheck - AI model integrity checker");
     println!();
     println!("Usage:");
-    println!("  icheck check <path> <source> <author>/<model> [--revision <rev>]");
-    println!("  icheck generate <path> [-f|--force]");
-    println!("  icheck verify <path>");
+    println!("  icheck check [<path>] [<author>/<model>] [--source <name>] [--revision <rev>]");
+    println!("  icheck generate [<path>] [-f|--force]");
+    println!("  icheck verify [<path>]");
+    println!();
+    println!("Defaults:");
+    println!("  <path>            the model directory; without it the current directory is used,");
+    println!("                    or the nearest parent holding .iCheck");
+    println!("  <author>/<model>  read from .iCheck/official/official_hash.json");
+    println!("  --source          the platform recorded there, else ms");
     println!();
     println!("Commands:");
     println!("  check      fetch upstream hashes and verify the local model");
@@ -258,13 +316,15 @@ fn print_help() {
     println!("  verify     verify the local model against the anchor");
     println!();
     println!("Source:");
-    println!("  ms   ModelScope");
+    println!("  ms   ModelScope (default)");
     println!("  hf   HuggingFace");
     println!();
     println!("Options:");
     println!("  -h, --help      show this help");
     println!("  -v, --version   show the version");
     println!("  --debug         print detailed diagnostics (timings, windows, per-file verdicts)");
+    println!("  --source <name> check: platform to fetch the official hashes from (ms, hf)");
+    println!("  --revision <r>  check: pin an upstream revision (default: the platform default)");
     println!("  -f, --force     generate: anchor even if the official check has not fully passed");
     println!("                  only the precondition is relaxed, official_hash is left untouched");
     println!();
