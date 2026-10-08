@@ -58,15 +58,14 @@ pub fn walk(root: &Path, excluded: &[String]) -> Result<Vec<WalkEntry>> {
                         size: md.len(),
                     });
                 }
-            } else if file_type.is_symlink() {
-                if let Ok(md) = std::fs::metadata(entry.path()) {
-                    if md.is_file() {
-                        out.push(WalkEntry {
-                            name: rel,
-                            size: md.len(),
-                        });
-                    }
-                }
+            } else if file_type.is_symlink()
+                && let Ok(md) = std::fs::metadata(entry.path())
+                && md.is_file()
+            {
+                out.push(WalkEntry {
+                    name: rel,
+                    size: md.len(),
+                });
             }
         }
     }

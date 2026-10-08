@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// 级别与退出码一致: ERROR 只用于退出码 3 的故障,
 /// 校验不通过(退出码 1 / 2)是"干完了活", 不是错误
-
 static DEBUG_ON: AtomicBool = AtomicBool::new(false);
 
 /// 当前进度行的内容, 日志打完立刻重画, 免得进度条被日志擦掉

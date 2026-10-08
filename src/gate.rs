@@ -280,12 +280,11 @@ impl Governor {
 /// 默认并发上限真正的并发数由 Gate 在运行中自适应, 这里只是线程数上限
 /// 可用 ICHECK_WORKERS 硬指定, 自动控制在混合存储/特殊挂载上一定会猜错
 pub fn max_workers() -> usize {
-    if let Ok(v) = std::env::var("ICHECK_WORKERS") {
-        if let Ok(n) = v.trim().parse::<usize>() {
-            if n > 0 {
-                return n;
-            }
-        }
+    if let Ok(v) = std::env::var("ICHECK_WORKERS")
+        && let Ok(n) = v.trim().parse::<usize>()
+        && n > 0
+    {
+        return n;
     }
     std::thread::available_parallelism()
         .map(|n| n.get())
