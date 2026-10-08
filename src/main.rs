@@ -81,7 +81,7 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
             }
             let root = PathBuf::from(&positional[0]);
             let platform = Platform::parse(&positional[1]).ok_or_else(|| {
-                Error::Usage(format!("unknown source: {} (only ms is supported)", positional[1]))
+                Error::Usage(format!("unknown source: {}, use ms or hf", positional[1]))
             })?;
             let model_id = positional[2].clone();
 
@@ -259,6 +259,7 @@ fn print_help() {
     println!();
     println!("Source:");
     println!("  ms   ModelScope");
+    println!("  hf   HuggingFace");
     println!();
     println!("Options:");
     println!("  -h, --help      show this help");

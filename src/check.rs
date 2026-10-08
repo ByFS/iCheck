@@ -78,6 +78,13 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     crate::debug!("fetch finished in {} ms", fetch_started.elapsed().as_millis());
 
     crate::info!("Upstream manifest: {}", report::files(manifest.entries.len()));
+    // 上游不给哈希的文件不在基准里, 这个数必须让人看见: 在 HuggingFace 上它可能接近一半
+    if manifest.uncovered > 0 {
+        crate::warn!(
+            "{} have no content hash on the platform, they are not covered",
+            report::files(manifest.uncovered)
+        );
+    }
 
     let prev: Option<OfficialHash> = jsonio::load(&state_path)?;
     crate::debug!(

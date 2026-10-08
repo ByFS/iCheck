@@ -1,3 +1,5 @@
+pub mod http;
+pub mod huggingface;
 pub mod modelscope;
 
 use crate::error::Result;
@@ -5,12 +7,14 @@ use crate::error::Result;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Platform {
     ModelScope,
+    HuggingFace,
 }
 
 impl Platform {
     pub fn parse(s: &str) -> Option<Platform> {
         match s {
             "ms" | "modelscope" => Some(Platform::ModelScope),
+            "hf" | "huggingface" => Some(Platform::HuggingFace),
             _ => None,
         }
     }
@@ -19,6 +23,7 @@ impl Platform {
     pub fn as_str(self) -> &'static str {
         match self {
             Platform::ModelScope => "modelscope",
+            Platform::HuggingFace => "huggingface",
         }
     }
 
@@ -26,6 +31,7 @@ impl Platform {
     pub fn display_name(self) -> &'static str {
         match self {
             Platform::ModelScope => "ModelScope",
+            Platform::HuggingFace => "HuggingFace",
         }
     }
 
@@ -42,6 +48,7 @@ impl Platform {
     pub fn page_url(self, model_id: &str) -> String {
         match self {
             Platform::ModelScope => format!("https://modelscope.cn/models/{model_id}"),
+            Platform::HuggingFace => format!("https://huggingface.co/{model_id}"),
         }
     }
 }
@@ -62,10 +69,16 @@ pub struct Entry {
 #[derive(Clone, Debug)]
 pub struct Manifest {
     pub entries: Vec<Entry>,
+    /// 上游没给内容 SHA-256 或大小的条目数, 这些文件不在基准里
+    ///
+    /// ModelScope 上这个数实测是 0, HuggingFace 上会是三分之一到一半 —— 差别太大,
+    /// 所以它必须能被看见, 不能只藏在 --debug 里
+    pub uncovered: usize,
 }
 
 pub fn fetch(platform: Platform, model_id: &str, revision: Option<&str>) -> Result<Manifest> {
     match platform {
         Platform::ModelScope => modelscope::fetch(model_id, revision),
+        Platform::HuggingFace => huggingface::fetch(model_id, revision),
     }
 }
