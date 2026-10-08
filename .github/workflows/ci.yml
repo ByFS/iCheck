@@ -1,0 +1,27 @@
+name: CI
+
+# release.yml 只在打 tag 时跑测试, 平时坏了要等到发版才发现, 所以这里补一道
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test and lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Test
+        run: cargo test --all-targets --locked
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
