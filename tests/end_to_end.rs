@@ -174,6 +174,22 @@ fn verify_reports_missing_and_added() {
     assert_eq!(summary(&out, "Added").as_deref(), Some("1"));
 }
 
+/// 锚点里带能跳出模型目录的路径时必须直接拒绝, 而不是照着去读
+#[test]
+fn verify_refuses_an_anchor_with_an_escaping_path() {
+    let root = model("escape", None);
+    assert_eq!(code(&run(&["generate", root_of(&root)])), 0);
+
+    let hash_path = root.join(".iCheck/anchor/anchor_hash.json");
+    let text = std::fs::read_to_string(&hash_path).unwrap();
+    let text = text.replace("\"config.json\"", "\"/etc/hostname\"");
+    std::fs::write(&hash_path, text).unwrap();
+
+    let v = run(&["verify", root_of(&root)]);
+    assert_eq!(code(&v), 3, "{}", stdout(&v));
+    assert!(stderr(&v).contains("unsafe path"), "{}", stderr(&v));
+}
+
 /// 读不了的条目走另一条分支, 也归到集合级差异
 #[test]
 fn verify_reports_an_unreadable_entry() {

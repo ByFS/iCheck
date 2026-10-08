@@ -7,6 +7,7 @@ mod hashing;
 mod jsonio;
 mod log;
 mod official;
+mod path;
 mod pool;
 mod report;
 mod upstream;

@@ -5,6 +5,7 @@ use crate::anchor::{self, AnchorHash, AnchorIndex};
 use crate::error::{Error, Result};
 use crate::hashing::Algorithm;
 use crate::jsonio;
+use crate::path;
 use crate::pool::{self, Job};
 use crate::report::{self, Row};
 use crate::walk;
@@ -32,6 +33,17 @@ pub fn run(root: &Path) -> Result<Outcome> {
     let hash_path = root.join(&index.anchor_hash);
     let anchor_hash: AnchorHash = jsonio::load(&hash_path)?
         .ok_or_else(|| Error::Data(format!("{} not found", hash_path.display())))?;
+
+    // 锚点文件在本地上, 但可能被改过或来自别处: 与上游清单走同一道路径校验
+    for f in &anchor_hash.files {
+        if !path::is_safe_relative(&f.name) {
+            return Err(Error::Data(format!(
+                "{} has an unsafe path: {}",
+                hash_path.display(),
+                f.name
+            )));
+        }
+    }
 
     crate::info!(
         "Source: {}",
