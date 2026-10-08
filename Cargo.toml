@@ -2,6 +2,14 @@
 name = "icheck"
 version = "0.1.0"
 edition = "2024"
+# edition 2024 要 1.85, 但代码里用了 let-chains(if let .. && ..), 那是 1.88 才稳定的
+rust-version = "1.88"
+description = "Verify AI model files against the hashes published by the model platform"
+license = "GPL-3.0-only"
+repository = "https://github.com/ByFS/iCheck"
+readme = "README.md"
+keywords = ["integrity", "sha256", "blake3", "checksum", "modelscope"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 blake3 = "1"
@@ -10,3 +18,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 ureq = "2"
+
+[profile.release]
+# 热循环只有读与哈希两件事, 让它跨 crate 内联; 代价只是构建慢一点
+lto = "thin"
+codegen-units = 1
