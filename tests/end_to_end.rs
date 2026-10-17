@@ -372,6 +372,28 @@ fn no_command_is_a_usage_error() {
     assert!(stderr(&o).contains("run `icheck --help`"), "{}", stderr(&o));
 }
 
+/// 短别名 c / g / v 分别等价于 check / generate / verify
+#[test]
+fn short_command_names_are_aliases() {
+    let root = model("alias", None);
+
+    let g = run(&["g", root_of(&root)]);
+    assert_eq!(code(&g), 0, "{}", stderr(&g));
+    assert_eq!(summary(&stdout(&g), "Result").as_deref(), Some("PASS"));
+
+    let v = run(&["v", root_of(&root)]);
+    assert_eq!(code(&v), 0, "{}", stderr(&v));
+    assert_eq!(summary(&stdout(&v), "Result").as_deref(), Some("PASS"));
+
+    // c == check: 首次缺模型 ID, 报错带 the first time, 且不触网
+    let root = scratch("alias-check").join("deepseek-ai/X");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("config.json"), b"{}").unwrap();
+    let c = run(&["c", root_of(&root)]);
+    assert_eq!(code(&c), 3);
+    assert!(stderr(&c).contains("the first time"), "{}", stderr(&c));
+}
+
 /// 帮助与版本写在命令后面也认
 #[test]
 fn help_and_version_work_anywhere() {

@@ -71,7 +71,16 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
         ));
     };
 
-    match command.as_str() {
+    // 短别名: c / g / v 是 check / generate / verify 的首字母, 进来先归一成全名,
+    // 后面全按全名处理, 未知名字照旧落到 unknown_command
+    let command = match command.as_str() {
+        "c" => "check",
+        "g" => "generate",
+        "v" => "verify",
+        other => other,
+    };
+
+    match command {
         "check" => {
             let (positional, revision, source) = check_args(&args[1..])?;
             if positional.len() > 2 {
@@ -311,9 +320,10 @@ fn print_help() {
     println!("  --source          the platform recorded there, else ms");
     println!();
     println!("Commands:");
-    println!("  check      fetch upstream hashes and verify the local model");
-    println!("  generate   build the local anchor from official_hash.json");
-    println!("  verify     verify the local model against the anchor");
+    println!("  check (c)     fetch upstream hashes and verify the local model");
+    println!("  generate (g)  build the local anchor from official_hash.json");
+    println!("  verify (v)    verify the local model against the anchor");
+    println!("  help          show this help");
     println!();
     println!("Source:");
     println!("  ms   ModelScope (default)");
