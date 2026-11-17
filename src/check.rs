@@ -18,8 +18,8 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(200);
 
 pub struct Outcome {
-    /// 非 pass 的条目数, 决定退出码
-    pub failed: usize,
+    /// 非 pass 的条目数, 决定退出码: 缺失也计在这里, 与报告里的 Failed 不是一回事
+    pub non_pass: usize,
     /// 其中"内容哈希不符"的条数, 用于与"仅集合级差异"区分退出码
     pub hash_mismatch: usize,
 }
@@ -164,10 +164,10 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
     }
 
     crate::log::blank();
-    let failed = report(&state, &details, &state_path);
+    let non_pass = report(&state, &details, &state_path);
 
     Ok(Outcome {
-        failed,
+        non_pass,
         hash_mismatch,
     })
 }
@@ -177,7 +177,9 @@ pub fn run(root: &Path, platform: Platform, model_id: &str, revision: Option<&st
 fn report(state: &OfficialHash, details: &HashMap<usize, Vec<String>>, state_path: &Path) -> usize {
     let pass = state.count(CheckState::Pass);
     let total = state.files.len();
-    let failed = total - pass;
+    let non_pass = total - pass;
+    let missing = state.count(CheckState::Missing);
+    let failed = non_pass - missing;
 
     // 条目太多时只列非 pass 的, 避免上万个小文件刷屏
     let list_all = total <= report::LIST_LIMIT;
@@ -202,16 +204,18 @@ fn report(state: &OfficialHash, details: &HashMap<usize, Vec<String>>, state_pat
     if shown > 0 {
         println!();
     }
-    report::print_summary(
-        &[
-            ("Files", total.to_string()),
-            ("Passed", pass.to_string()),
-            ("Failed", failed.to_string()),
-            ("State", state_path.display().to_string()),
-        ],
-        if failed == 0 { "PASS" } else { "FAIL" },
-    );
-    failed
+    let mut pairs = vec![
+        ("Files", total.to_string()),
+        ("Passed", pass.to_string()),
+    ];
+    // 缺失单独一行: 它说明集合不完整, 而不是内容损坏
+    if missing > 0 {
+        pairs.push(("Missing", missing.to_string()));
+    }
+    pairs.push(("Failed", failed.to_string()));
+    pairs.push(("State", state_path.display().to_string()));
+    report::print_summary(&pairs, report::result_of(failed, missing));
+    non_pass
 }
 
 /// 续跑前确认上游快照没变, 按哈希清单比对, 不依赖平台的 revision 语义

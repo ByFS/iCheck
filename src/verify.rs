@@ -11,8 +11,9 @@ use crate::report::{self, Row};
 use crate::walk;
 
 pub struct Outcome {
-    /// 集合级差异与内容不符之和, 决定退出码 多余文件不计入
-    pub failed: usize,
+    /// 集合级差异与内容不符之和, 决定退出码: 缺失也计入, 多余文件不计入
+    /// 报告里的 Failed 不含 Missing, 所以这个数与报告里的 Failed 不是一回事
+    pub non_pass: usize,
     /// 其中"内容哈希不符"的条数, 用于与"仅集合级差异"区分退出码
     pub hash_mismatch: usize,
 }
@@ -57,6 +58,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
     let mut slots: Vec<Slot> = Vec::with_capacity(anchor_hash.files.len());
     let mut jobs: Vec<Job> = Vec::new();
     let mut broken_rows: Vec<Row> = Vec::new();
+    let mut missing = 0usize;
 
     for f in &anchor_hash.files {
         let path = root.join(&f.name);
@@ -64,6 +66,7 @@ pub fn run(root: &Path) -> Result<Outcome> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 broken_rows.push(Row::new(report::MISSING, &f.name));
                 slots.push(Slot::Broken);
+                missing += 1;
             }
             Err(e) => {
                 broken_rows.push(Row::with_detail(
@@ -129,7 +132,10 @@ pub fn run(root: &Path) -> Result<Outcome> {
         println!();
     }
     if problems > 0 {
-        crate::info!("Quick check: {broken} failed, {added} added, starting verification");
+        crate::info!(
+            "Quick check: {missing} missing, {} failed, {added} added, starting verification",
+            broken - missing
+        );
     } else {
         crate::info!("Quick check passed, starting verification");
     }
@@ -189,13 +195,18 @@ pub fn run(root: &Path) -> Result<Outcome> {
     let shown = report::print_rows(&rows);
 
     let total = anchor_hash.files.len();
-    let failed = broken + hash_failed;
+    let non_pass = broken + hash_failed;
+    let failed = non_pass - missing;
 
     let mut pairs: Vec<(&str, String)> = vec![
         ("Files", total.to_string()),
         ("Passed", passed.to_string()),
-        ("Failed", failed.to_string()),
     ];
+    // 缺失单独一行: 它说明集合不完整, 而不是内容损坏
+    if missing > 0 {
+        pairs.push(("Missing", missing.to_string()));
+    }
+    pairs.push(("Failed", failed.to_string()));
     if added > 0 {
         pairs.push(("Added", added.to_string()));
     }
@@ -204,10 +215,10 @@ pub fn run(root: &Path) -> Result<Outcome> {
     if shown > 0 {
         println!();
     }
-    report::print_summary(&pairs, if failed == 0 { "PASS" } else { "FAIL" });
+    report::print_summary(&pairs, report::result_of(failed, missing));
 
     Ok(Outcome {
-        failed,
+        non_pass,
         hash_mismatch,
     })
 }

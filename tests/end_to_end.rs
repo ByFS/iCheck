@@ -177,9 +177,11 @@ fn verify_reports_missing_and_added() {
     assert_eq!(code(&v), 1, "{out}");
     assert!(has_row(&out, "[MISSING]", "sub/notes.md"), "{out}");
     assert!(has_row(&out, "[ADDED]", "extra.txt"), "{out}");
-    // 多余的文件不算失败, 只单独计数
-    assert_eq!(summary(&out, "Failed").as_deref(), Some("1"));
+    // 缺失与多余都不算失败, 只单独计数; 没有内容损坏时 Result 是 WARNING
+    assert_eq!(summary(&out, "Failed").as_deref(), Some("0"));
+    assert_eq!(summary(&out, "Missing").as_deref(), Some("1"));
     assert_eq!(summary(&out, "Added").as_deref(), Some("1"));
+    assert_eq!(summary(&out, "Result").as_deref(), Some("WARNING"));
 }
 
 /// 省掉路径: 站在模型目录里直接 verify
@@ -192,6 +194,25 @@ fn verify_without_a_path_uses_the_current_directory() {
     assert_eq!(code(&v), 0, "{}", stderr(&v));
     assert!(stderr(&v).contains("INFO: Root: "), "{}", stderr(&v));
     assert_eq!(summary(&stdout(&v), "Result").as_deref(), Some("PASS"));
+}
+
+/// 缺失与内容不符同时存在时, FAIL 优先于 WARNING
+#[test]
+fn verify_reports_fail_when_missing_and_mismatch_coexist() {
+    let root = model("mix", None);
+    assert_eq!(code(&run(&["generate", root_of(&root)])), 0);
+
+    std::fs::remove_file(root.join("sub/notes.md")).unwrap();
+    let mut data = std::fs::read(root.join("a.bin")).unwrap();
+    data[0] ^= 0xFF;
+    std::fs::write(root.join("a.bin"), &data).unwrap();
+
+    let v = run(&["verify", root_of(&root)]);
+    let out = stdout(&v);
+    assert_eq!(code(&v), 2, "{out}");
+    assert_eq!(summary(&out, "Failed").as_deref(), Some("1"));
+    assert_eq!(summary(&out, "Missing").as_deref(), Some("1"));
+    assert_eq!(summary(&out, "Result").as_deref(), Some("FAIL"));
 }
 
 /// 站在子目录里也能找到模型根

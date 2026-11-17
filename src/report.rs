@@ -92,3 +92,18 @@ pub fn print_summary(pairs: &[(&str, String)], result: &str) {
     println!();
     println!("{:<width$} {result}", "Result:", width = width);
 }
+
+/// 摘要块收尾的 Result 判定, check 与 verify 共用一套词
+///
+/// FAIL 优先: 有内容或大小不符, 或读不了, 就是 FAIL
+/// 没有失败但有缺失, 说明集合不完整但没有任何内容被证明是坏的, 报 WARNING
+/// 两者都没有才是 PASS
+pub fn result_of(failed: usize, missing: usize) -> &'static str {
+    if failed > 0 {
+        "FAIL"
+    } else if missing > 0 {
+        "WARNING"
+    } else {
+        "PASS"
+    }
+}

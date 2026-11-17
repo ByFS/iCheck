@@ -11,7 +11,7 @@ use crate::walk;
 
 pub struct Outcome {
     /// 非 pass 的条目数, 决定退出码
-    pub failed: usize,
+    pub non_pass: usize,
 }
 
 pub fn run(root: &Path, force: bool) -> Result<Outcome> {
@@ -54,7 +54,7 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
             crate::log::blank();
             crate::warn!("Refusing to anchor: the official check has not fully passed");
             crate::warn!("Re-run with -f to anchor anyway");
-            return Ok(Outcome { failed: bad.len() });
+            return Ok(Outcome { non_pass: bad.len() });
         }
 
         // -f 已经是在明确接受不完美的前提下强行建锚点, 不再展开统计与逐条清单
@@ -166,5 +166,5 @@ pub fn run(root: &Path, force: bool) -> Result<Outcome> {
     }
     crate::report::print_summary(&pairs, if failed == 0 { "PASS" } else { "FAIL" });
 
-    Ok(Outcome { failed })
+    Ok(Outcome { non_pass: failed })
 }

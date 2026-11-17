@@ -96,7 +96,7 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
             crate::info!("Root: {}", root.display());
             warn_unoptimized();
             let outcome = check::run(&root, platform, &model_id, revision.as_deref())?;
-            Ok(finish(outcome.failed, outcome.hash_mismatch))
+            Ok(finish(outcome.non_pass, outcome.hash_mismatch))
         }
         "generate" => {
             let (path, force) = path_and_flags(&args[1..], "generate", true)?;
@@ -104,7 +104,7 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
             crate::info!("Root: {}", root.display());
             warn_unoptimized();
             let outcome = generate::run(&root, force)?;
-            Ok(finish(outcome.failed, 0))
+            Ok(finish(outcome.non_pass, 0))
         }
         "verify" => {
             let (path, _) = path_and_flags(&args[1..], "verify", false)?;
@@ -112,7 +112,7 @@ fn dispatch(args: &[String]) -> Result<ExitCode> {
             crate::info!("Root: {}", root.display());
             warn_unoptimized();
             let outcome = verify::run(&root)?;
-            Ok(finish(outcome.failed, outcome.hash_mismatch))
+            Ok(finish(outcome.non_pass, outcome.hash_mismatch))
         }
         "help" => {
             print_help();
